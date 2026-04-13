@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend Use"
+  short_description: "Deploy and test vLLM Ascend inference"
+  default_prompt: "Use $vllm-ascend-use to explain vLLM and vllm-ascend architecture, deploy a stock Ascend service, generate the multimodal benchmark dataset, run the benchmark, and compare outputs against a baseline."
