@@ -25,6 +25,8 @@ Read the reference that matches the task:
 - Read [references/performance-testing.md](references/performance-testing.md) when running the `10k text token + 40 image` benchmark.
 - Read [references/accuracy-testing.md](references/accuracy-testing.md) when validating pre-LLM input consistency.
 
+If the request is specifically about API server hotspot profiling, use the companion skill `vllm-ascend-api-server-profiler` instead of overloading this general skill.
+
 ### 2. Prefer stock serving paths
 
 Prefer `vllm serve` instead of `python -m vllm.entrypoints.openai.api_server` unless you are debugging a very specific issue. This keeps the workflow aligned with upstream `vllm` and `vllm-ascend`.

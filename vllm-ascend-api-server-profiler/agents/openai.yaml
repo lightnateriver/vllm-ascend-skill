@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend API Server Profiler"
+  short_description: "Profile API server bottlenecks on Ascend"
+  default_prompt: "Use $vllm-ascend-api-server-profiler to profile stock vllm-ascend API server hotspots and summarize the bottlenecks for later optimization."

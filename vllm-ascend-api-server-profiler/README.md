@@ -1,0 +1,101 @@
+# vllm-ascend-api-server-profiler
+
+面向 stock `vllm-ascend` OpenAI API server 的热点分析 skill，目标是帮助使用者在不修改 `vllm` / `vllm-ascend` 源码的前提下，定位 API server 侧瓶颈并给出后续优化方向。
+
+## 适用场景
+
+这个 skill 适合下面几类任务：
+
+- 需要复现一轮 Qwen 或 Qwen3.5 的 API server profile
+- 需要为 API server 侧生成请求级 timeline 和热点函数表
+- 需要解释 `HTTP total wall time`、`API server CPU time` 和 `API server preprocess chain`
+- 需要说明为什么函数时间不能直接相加
+- 需要只分析 API server 侧，而不把 engine core / TP worker 当成主结论
+
+## 核心约束
+
+默认遵守这些限制：
+
+- 不修改 `vllm` 源码
+- 不修改 `vllm-ascend` 源码
+- 不使用 `0407` patch
+- 不使用 phase 方案
+- 所有采集、打印与输出能力都通过外置 monkey patch 实现
+
+## 目录结构
+
+```text
+.
+├── README.md
+├── SKILL.md
+├── agents/
+│   └── openai.yaml
+├── references/
+│   ├── metric-definitions.md
+│   └── qwen35-stock-config.md
+└── scripts/
+    ├── start_profiled_api_server.sh
+    ├── run_vllm_api_server_profiled.py
+    ├── run_profiled_dataset_rounds.py
+    └── summarize_api_server_profile.py
+```
+
+## 工作流概览
+
+### 1. 准备输入
+
+通常使用：
+
+- `10k` 文本 token
+- `40` 张图片
+- `288x512`
+- `3 warmup + 1 profile`
+- 组内组外无重复文本与图像
+
+### 2. 启动 profiled API server
+
+使用：
+
+```bash
+scripts/start_profiled_api_server.sh
+```
+
+该脚本会通过外置入口 `run_vllm_api_server_profiled.py` 安装 monkey patch，并把 profile 结果写到指定目录。
+
+### 3. 驱动 profile round
+
+使用：
+
+```bash
+python scripts/run_profiled_dataset_rounds.py ...
+```
+
+对 profile round 单独打 profiling header。
+
+### 4. 汇总结果
+
+使用：
+
+```bash
+python scripts/summarize_api_server_profile.py \
+  --functions-json <functions.json> \
+  --driver-results <driver-results.json>
+```
+
+输出内容会覆盖：
+
+- API server 时间线
+- 热点函数表
+- 总耗时口径解释
+- 不能直接相加的原因
+- 不改源码前提下的优化建议
+
+## 建议优先关注的热点
+
+在 Qwen3.5 的典型多模态场景中，通常更值得先盯这些 API server 侧函数：
+
+- `Qwen2VLImageProcessorFast._preprocess`
+- `ProcessorInputs.get_mm_hashes`
+- `SingleWriterShmObjectStorage.copy_to_buffer`
+
+像 `create_chat_completion` 这一类大包围函数，不适合作为最终优化结论。
