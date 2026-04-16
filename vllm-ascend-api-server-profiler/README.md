@@ -12,6 +12,7 @@
 - 需要为 API server 侧生成请求级 timeline 和热点函数表
 - 需要把 API server 预处理拆成顺序 stage，并解释 stage gap
 - 需要解释并发函数的 `aggregate-total` 与 `window wall` 为什么不同
+- 需要拆解热点函数内部执行逻辑，并给出多种性能调优方案
 - 需要解释 `HTTP total wall time`、`API server CPU time` 和 `API server preprocess chain`
 - 需要说明为什么函数时间不能直接相加
 - 需要只分析 API server 侧，而不把 engine core / TP worker 当成主结论
@@ -36,6 +37,7 @@
 │   └── openai.yaml
 ├── references/
 │   ├── metric-definitions.md
+│   ├── hotspot-optimization-options.md
 │   └── qwen35-stock-config.md
 └── scripts/
     ├── start_profiled_api_server.sh
@@ -96,6 +98,17 @@ python scripts/summarize_api_server_profile.py \
 - 不能直接相加的原因
 - 不改源码前提下的优化建议
 
+如果用户进一步要求“先给优化方案，不先执行优化”，可以继续读取：
+
+- `references/hotspot-optimization-options.md`
+
+该 reference 会按热点函数解释：
+
+- 函数内部主要执行逻辑
+- 为什么它是或者不是当前关键路径
+- 多种优化选项
+- 每种方案的适用条件和 trade-off
+
 ## 推荐解读顺序
 
 建议按下面顺序看结果：
@@ -120,5 +133,6 @@ python scripts/summarize_api_server_profile.py \
 - `ProcessorInputs.get_mm_hashes`
 - `SingleWriterShmObjectStorage.copy_to_buffer`
 - `Qwen2TokenizerFast.__call__`
+- `MediaConnector.load_from_url_async`
 
 像 `create_chat_completion` 这一类大包围函数，不适合作为最终优化结论。

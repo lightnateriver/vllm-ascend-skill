@@ -7,7 +7,7 @@
 - `vllm-ascend-use`
   面向 stock `vllm-ascend` 的通用实战工作流，覆盖架构理解、服务部署、性能测试和前 `LLM` 输入一致性验证。
 - `vllm-ascend-api-server-profiler`
-  面向 stock `vllm-ascend` OpenAI API server 的热点分析工作流，强调外置 monkey patch、请求级 profile、stage-based breakdown 与可操作的 API server 结论。
+  面向 stock `vllm-ascend` OpenAI API server 的热点分析工作流，强调外置 monkey patch、请求级 profile、stage-based breakdown，以及基于热点函数内部逻辑的多方案调优分析。
 
 ## 仓库结构
 
@@ -37,6 +37,7 @@
 - 需要生成 `10k text token + 40 image` 的单并发 benchmark 数据并做性能测试
 - 需要比较两次部署在 `LLM` 前的输入是否一致
 - 需要分析 OpenAI API server 侧而不是 engine core / TP worker 侧的热点函数
+- 需要先拿到 API server 热点函数的多种调优方案，再决定后续实际优化路线
 
 ## 使用建议
 

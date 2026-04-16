@@ -1,4 +1,4 @@
 interface:
   display_name: "vLLM Ascend API Server Profiler"
-  short_description: "Profile stage-based API server bottlenecks on Ascend"
-  default_prompt: "Use $vllm-ascend-api-server-profiler to profile stock vllm-ascend API server hotspots, break them into stage_spans and concurrency_windows, and summarize the bottlenecks for later optimization."
+  short_description: "Profile and analyze API server hotspots on Ascend"
+  default_prompt: "Use $vllm-ascend-api-server-profiler to profile stock vllm-ascend API server hotspots, break them into stage_spans and concurrency_windows, explain the internal logic of each hotspot, and give multiple optimization options before we change any code."

@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-api-server-profiler
-description: Profile and analyze stock vllm-ascend OpenAI API server hotspots on Ascend NPU with external monkey patch only. Use when Codex needs to measure API server-side wall time and function hotspots for Qwen or Qwen3.5 multimodal requests, collect a request-scoped span from HfRenderer.render_messages_async to copy_to_buffer, generate ordered API server timelines and hotspot tables, or explain API server bottlenecks without treating engine core or TP worker as the conclusion.
+description: Profile and analyze stock vllm-ascend OpenAI API server hotspots on Ascend NPU with external monkey patch only. Use when Codex needs to measure API server-side wall time and function hotspots for Qwen or Qwen3.5 multimodal requests, collect a request-scoped span from HfRenderer.render_messages_async to copy_to_buffer, generate ordered API server timelines and hotspot tables, explain API server bottlenecks without treating engine core or TP worker as the conclusion, or propose hotspot-specific optimization options before any code changes.
 ---
 
 # vLLM Ascend API Server Profiler
@@ -78,6 +78,22 @@ Prefer functionally meaningful steps over broad wrappers. Use stage boundaries t
 - Poor final conclusions: `create_chat_completion` or similarly broad wrappers that mix unrelated work.
 - For repeated functions such as `MediaConnector.load_from_url_async` or `SingleWriterShmObjectStorage.copy_to_buffer`, use `concurrency_windows` to decide whether the real issue is overlap, gaps between calls, or total work.
 
+### 7. Propose optimization options after profiling
+
+When the user asks for optimization guidance, do not jump from wrappers to fixes. Work in this order:
+
+1. stage bottleneck
+2. leaf hotspot
+3. hotspot internal execution logic
+4. multiple optimization options with trade-offs
+
+Use [references/hotspot-optimization-options.md](references/hotspot-optimization-options.md) as the default playbook for API server-side tuning ideas.
+
+- Explain what the hotspot actually does internally before proposing fixes.
+- Offer multiple options when trade-offs differ, for example: low-intrusion, cache-policy, architecture, and quality-throughput trade-off options.
+- Keep API server scope explicit. Do not let engine core or TP worker optimizations dominate the answer unless the user changes the scope.
+- If the user only wants options, stop at analysis and do not execute any optimization.
+
 ## Reporting Rules
 
 - Draw the API server timeline in chronological order, not only as nested blocks.
@@ -101,6 +117,8 @@ Prefer functionally meaningful steps over broad wrappers. Use stage boundaries t
   Convert `functions.json` and driver results into a timeline, hotspot table, and analysis scaffold.
 - [references/metric-definitions.md](references/metric-definitions.md)
   Define timing terms and interpretation rules.
+- [references/hotspot-optimization-options.md](references/hotspot-optimization-options.md)
+  Explain hotspot internals and provide multiple optimization options with trade-offs.
 - [references/qwen35-stock-config.md](references/qwen35-stock-config.md)
   Capture the stock Qwen3.5 API server profiling baseline.
 
@@ -110,3 +128,4 @@ Prefer functionally meaningful steps over broad wrappers. Use stage boundaries t
 - "Use $vllm-ascend-api-server-profiler to explain why `load_from_url_async` aggregate time does not equal wall-critical-path."
 - "Use $vllm-ascend-api-server-profiler to explain why `sum(stage wall)` is smaller than `api_server_total.preprocess_wall`."
 - "Use $vllm-ascend-api-server-profiler to produce an ordered API server timeline and hotspot table from these profile artifacts."
+- "Use $vllm-ascend-api-server-profiler to analyze each hotspot function internally and give me several optimization options before we change any code."
