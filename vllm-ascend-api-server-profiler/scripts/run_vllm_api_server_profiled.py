@@ -98,6 +98,68 @@ _API_SERVER_TOTAL_SPAN_LABEL = (
 _API_SERVER_TOTAL_START_LABEL = "HfRenderer.render_messages_async"
 _API_SERVER_TOTAL_END_LABEL = "SingleWriterShmObjectStorage.copy_to_buffer"
 
+_API_SERVER_TOTAL_STAGE_LABEL = "api_server_total.preprocess_wall"
+
+_STAGE_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "label": "api_stage.render_messages_wall",
+        "order": 1,
+        "start_labels": ["HfRenderer.render_messages_async"],
+        "end_labels": ["HfRenderer.render_messages_async"],
+        "notes": (
+            "Render stage includes message parsing and chat template application."
+        ),
+    },
+    {
+        "label": "api_stage.tokenize_wall",
+        "order": 2,
+        "start_labels": ["AsyncMicrobatchTokenizer.encode"],
+        "end_labels": ["AsyncMicrobatchTokenizer.encode"],
+        "notes": "Tokenizer stage after renderer output is finalized.",
+    },
+    {
+        "label": "api_stage.mm_hash_wall",
+        "order": 3,
+        "start_labels": ["ProcessorInputs.get_mm_hashes"],
+        "end_labels": ["ProcessorInputs.get_mm_hashes"],
+        "notes": "Multimodal hash generation before HF processor execution.",
+    },
+    {
+        "label": "api_stage.hf_processor_wall",
+        "order": 4,
+        "start_labels": ["InputProcessingContext.call_hf_processor"],
+        "end_labels": ["InputProcessingContext.call_hf_processor"],
+        "notes": "HF processor path covering image preprocess and tensor assembly.",
+    },
+    {
+        "label": "api_stage.shm_copy_wall",
+        "order": 5,
+        "start_labels": ["SingleWriterShmObjectStorage.copy_to_buffer"],
+        "end_labels": ["SingleWriterShmObjectStorage.copy_to_buffer"],
+        "notes": "Window from the first SHM buffer copy to the final SHM buffer copy.",
+    },
+    {
+        "label": _API_SERVER_TOTAL_STAGE_LABEL,
+        "order": 99,
+        "start_labels": [_API_SERVER_TOTAL_START_LABEL],
+        "end_labels": [_API_SERVER_TOTAL_END_LABEL],
+        "notes": "Full API server preprocess window before engine-side execution dominates.",
+    },
+]
+
+_CONCURRENCY_WINDOW_DEFINITIONS: list[dict[str, str]] = [
+    {
+        "label": "api_window.media_load",
+        "function": "MediaConnector.load_from_url_async",
+        "notes": "Concurrent media loads overlap; compare window wall against aggregate total.",
+    },
+    {
+        "label": "api_window.shm_copy",
+        "function": "SingleWriterShmObjectStorage.copy_to_buffer",
+        "notes": "Repeated SHM writes overlap partially; compare window wall against aggregate total.",
+    },
+]
+
 
 def _relative_request_ms(ts: float) -> float | None:
     request_start = _REQUEST_START_TIME.get()
@@ -165,6 +227,110 @@ def _record_function_timing(label: str, started_at: float, ended_at: float) -> N
             api_server_total["duration_ms"] = (
                 api_server_total["end_ms"] - api_server_total["start_ms"]
             )
+
+
+def _select_function_row(
+    function_map: dict[str, dict[str, Any]],
+    labels: list[str],
+) -> dict[str, Any] | None:
+    for label in labels:
+        row = function_map.get(label)
+        if (
+            row is not None
+            and row["first_start_ms"] is not None
+            and row["last_end_ms"] is not None
+        ):
+            return row
+    return None
+
+
+def _build_stage_spans(
+    function_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    function_map = {row["function"]: row for row in function_rows}
+    stage_rows: list[dict[str, Any]] = []
+    for spec in _STAGE_DEFINITIONS:
+        start_row = _select_function_row(function_map, spec["start_labels"])
+        end_row = _select_function_row(function_map, spec["end_labels"])
+        if start_row is None or end_row is None:
+            continue
+
+        start_ms = start_row["first_start_ms"]
+        end_ms = end_row["last_end_ms"]
+        if start_ms is None or end_ms is None:
+            continue
+
+        stage_rows.append(
+            {
+                "label": spec["label"],
+                "order": spec["order"],
+                "kind": "stage-wall",
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "wall_ms": end_ms - start_ms,
+                "start_function": start_row["function"],
+                "end_function": end_row["function"],
+                "notes": spec["notes"],
+            }
+        )
+
+    stage_rows.sort(key=lambda row: (row["order"], row["start_ms"]))
+    return stage_rows
+
+
+def _build_concurrency_windows(
+    function_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    function_map = {row["function"]: row for row in function_rows}
+    windows: list[dict[str, Any]] = []
+    for spec in _CONCURRENCY_WINDOW_DEFINITIONS:
+        row = function_map.get(spec["function"])
+        if row is None:
+            continue
+        if row["first_start_ms"] is None or row["last_end_ms"] is None:
+            continue
+        windows.append(
+            {
+                "label": spec["label"],
+                "kind": "concurrency-window",
+                "function": row["function"],
+                "calls": row["calls"],
+                "first_start_ms": row["first_start_ms"],
+                "last_end_ms": row["last_end_ms"],
+                "window_wall_ms": row["wall_span_ms"],
+                "aggregate_total_ms": row["total_ms"],
+                "avg_ms": row["avg_ms"],
+                "max_ms": row["max_ms"],
+                "notes": spec["notes"],
+            }
+        )
+    windows.sort(
+        key=lambda row: (
+            float("inf") if row["first_start_ms"] is None else row["first_start_ms"]
+        )
+    )
+    return windows
+
+
+def _build_legacy_custom_spans(
+    stage_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    total_stage = next(
+        (row for row in stage_rows if row["label"] == _API_SERVER_TOTAL_STAGE_LABEL),
+        None,
+    )
+    if total_stage is None:
+        return []
+    return [
+        {
+            "label": _API_SERVER_TOTAL_SPAN_LABEL,
+            "start_ms": total_stage["start_ms"],
+            "end_ms": total_stage["end_ms"],
+            "duration_ms": total_stage["wall_ms"],
+            "start_function": total_stage["start_function"],
+            "end_function": total_stage["end_function"],
+        }
+    ]
 
 
 def _wrap_callable(obj: Any, attr: str, label: str) -> None:
@@ -462,23 +628,14 @@ def install_monkey_patch() -> None:
                             else row["start_ms"]
                         ),
                     )
-                    custom_span_rows = (
-                        sorted(
-                            request_custom_spans.values(),
-                            key=lambda row: (
-                                float("inf")
-                                if row["start_ms"] is None
-                                else row["start_ms"]
-                            ),
-                        )
-                        if request_custom_spans is not None
-                        else []
-                    )
+                    stage_span_rows = _build_stage_spans(ordered_function_rows)
+                    concurrency_window_rows = _build_concurrency_windows(function_rows)
+                    custom_span_rows = _build_legacy_custom_spans(stage_span_rows)
                     api_server_total_ms = next(
                         (
-                            row["duration_ms"]
-                            for row in custom_span_rows
-                            if row["label"] == _API_SERVER_TOTAL_SPAN_LABEL
+                            row["wall_ms"]
+                            for row in stage_span_rows
+                            if row["label"] == _API_SERVER_TOTAL_STAGE_LABEL
                         ),
                         None,
                     )
@@ -494,6 +651,8 @@ def install_monkey_patch() -> None:
                                 "response_start_ms": response_start_ms,
                                 "first_body_ms": first_body_ms,
                                 "api_server_total_ms": api_server_total_ms,
+                                "stage_spans": stage_span_rows,
+                                "concurrency_windows": concurrency_window_rows,
                                 "custom_spans": custom_span_rows,
                                 "ordered_functions": ordered_function_rows,
                                 "function_events": request_function_events,
@@ -506,7 +665,40 @@ def install_monkey_patch() -> None:
                     )
                     functions_txt_path.write_text(
                         (
-                            "custom_spans\n"
+                            "stage_spans\n"
+                            + "\n".join(
+                                [
+                                    (
+                                        f"{row['label']}: start_ms={row['start_ms']:.3f} "
+                                        f"end_ms={row['end_ms']:.3f} "
+                                        f"wall_ms={row['wall_ms']:.3f} "
+                                        f"start_function={row['start_function']} "
+                                        f"end_function={row['end_function']}"
+                                    )
+                                    for row in stage_span_rows
+                                    if row["start_ms"] is not None
+                                    and row["end_ms"] is not None
+                                    and row["wall_ms"] is not None
+                                ]
+                            )
+                            + "\n\nconcurrency_windows\n"
+                            + "\n".join(
+                                [
+                                    (
+                                        f"{row['label']}: function={row['function']} "
+                                        f"calls={row['calls']} "
+                                        f"aggregate_total_ms={row['aggregate_total_ms']:.3f} "
+                                        f"window_wall_ms={row['window_wall_ms']:.3f} "
+                                        f"first_start_ms={row['first_start_ms']:.3f} "
+                                        f"last_end_ms={row['last_end_ms']:.3f}"
+                                    )
+                                    for row in concurrency_window_rows
+                                    if row["first_start_ms"] is not None
+                                    and row["last_end_ms"] is not None
+                                    and row["window_wall_ms"] is not None
+                                ]
+                            )
+                            + "\n\nlegacy_custom_spans\n"
                             + "\n".join(
                                 [
                                     (

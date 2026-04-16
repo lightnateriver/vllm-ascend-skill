@@ -38,6 +38,7 @@ Use [scripts/start_profiled_api_server.sh](scripts/start_profiled_api_server.sh)
 - The wrapper sources the Ascend environment and exports the profiling headers and output directory defaults.
 - Keep the profiler attached to the whole API server request.
 - Record the outer API server span from `HfRenderer.render_messages_async` start to the last `SingleWriterShmObjectStorage.copy_to_buffer` end.
+- Emit `stage_spans` for the sequential API server stages and `concurrency_windows` for repeated or overlapping functions.
 
 The wrapper calls [scripts/run_vllm_api_server_profiled.py](scripts/run_vllm_api_server_profiled.py), which holds the external monkey patch logic.
 
@@ -53,26 +54,36 @@ Use [scripts/run_profiled_dataset_rounds.py](scripts/run_profiled_dataset_rounds
 
 Use [scripts/summarize_api_server_profile.py](scripts/summarize_api_server_profile.py) on the generated `functions.json` and the driver results JSON.
 
+Read the output in this order:
+
+1. `stage_spans`
+2. `concurrency_windows`
+3. leaf hotspot functions
+4. `HTTP total wall time`, `API server CPU time`, and `TTFT/E2E`
+
 The summary must preserve three different timing views:
 
 - `HTTP total wall time`
 - `API server CPU time`
 - `API server preprocess chain`
 
-Read [references/metric-definitions.md](references/metric-definitions.md) before writing conclusions. Do not add together times that overlap by nesting or concurrency.
+Read [references/metric-definitions.md](references/metric-definitions.md) before writing conclusions. Do not add together times that overlap by nesting or concurrency, and treat any `sum(stage wall) < total preprocess wall` delta as stage-to-stage glue time unless the trace shows otherwise.
 
 ### 6. Keep the hotspot report actionable
 
-Prefer functionally meaningful steps over broad wrappers.
+Prefer functionally meaningful steps over broad wrappers. Use stage boundaries to locate the slow region, then use leaf functions to name the bottleneck.
 
 - Good targets: `ProcessorInputs.get_mm_hashes`, `Qwen2VLImageProcessorFast._preprocess`, `Qwen2TokenizerFast.__call__`, `SingleWriterShmObjectStorage.copy_to_buffer`.
 - Useful context wrappers: `InputProcessingContext.call_hf_processor`, `Qwen3VLProcessor.__call__`.
 - Poor final conclusions: `create_chat_completion` or similarly broad wrappers that mix unrelated work.
+- For repeated functions such as `MediaConnector.load_from_url_async` or `SingleWriterShmObjectStorage.copy_to_buffer`, use `concurrency_windows` to decide whether the real issue is overlap, gaps between calls, or total work.
 
 ## Reporting Rules
 
 - Draw the API server timeline in chronological order, not only as nested blocks.
 - Mark which numbers are `wall-critical-path`, `aggregate-total`, and `inclusive-total`.
+- Make `stage_spans` the primary wall-time view for the API server side.
+- Explain stage gaps explicitly when `api_server_total.preprocess_wall` is larger than the sum of the individual stage walls.
 - Include a hotspot table with `function`, `calls`, `total_ms`, and `avg_ms`.
 - Explain why the times cannot be directly summed.
 - Give optimization suggestions only under the constraint that `vllm` and `vllm-ascend` source must remain unchanged.
@@ -96,5 +107,6 @@ Prefer functionally meaningful steps over broad wrappers.
 ## Practical Prompts
 
 - "Use $vllm-ascend-api-server-profiler to run a stock Qwen3.5 API server profile and summarize API-side hotspots."
-- "Use $vllm-ascend-api-server-profiler to explain why `load_from_url_async` aggregate time does not equal wall time."
+- "Use $vllm-ascend-api-server-profiler to explain why `load_from_url_async` aggregate time does not equal wall-critical-path."
+- "Use $vllm-ascend-api-server-profiler to explain why `sum(stage wall)` is smaller than `api_server_total.preprocess_wall`."
 - "Use $vllm-ascend-api-server-profiler to produce an ordered API server timeline and hotspot table from these profile artifacts."

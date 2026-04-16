@@ -55,28 +55,60 @@ Also set:
 
 ## Suggested target functions
 
-Track these API server functions before widening the scope:
+Track these API server functions before widening the scope.
+
+Use them in three groups rather than one flat list:
+
+### 1. Stage-boundary functions
 
 - `HfRenderer.render_messages_async`
-- `parse_chat_messages_async`
 - `MediaConnector.load_from_url_async`
 - `AsyncMicrobatchTokenizer.encode`
 - `ProcessorInputs.get_mm_hashes`
 - `InputProcessingContext.call_hf_processor`
+- `SingleWriterShmObjectStorage.copy_to_buffer`
+
+### 2. Context wrappers
+
+- `parse_chat_messages_async`
 - `Qwen3VLMultiModalProcessor._call_hf_processor`
 - `Qwen3VLProcessor.__call__`
 - `Qwen2VLImageProcessorFast.__call__`
 - `Qwen2VLImageProcessorFast.preprocess`
+
+### 3. Leaf hotspots
+
 - `Qwen2VLImageProcessorFast._preprocess`
 - `Qwen2TokenizerFast.__call__`
 - `BatchFeature.convert_to_tensors`
 - `BatchEncoding.convert_to_tensors`
+
+### 4. Concurrency windows
+
+- `MediaConnector.load_from_url_async`
 - `SingleWriterShmObjectStorage.copy_to_buffer`
 
 ## Outer API server span
 
-Use this request-scoped span as the API server preprocessing total:
+Use this request-scoped span as the API server preprocessing total.
+
+Primary reporting label:
+
+- `api_server_total.preprocess_wall`
+
+Backward-compatible custom span:
 
 - Start: `HfRenderer.render_messages_async`
 - End: `SingleWriterShmObjectStorage.copy_to_buffer`
 - Label: `api_server_total.render_messages_async_to_copy_to_buffer`
+
+## Recommended reading order
+
+When the profile is complete, interpret it in this order:
+
+1. `api_server_total.preprocess_wall`
+2. `stage_spans`
+3. `concurrency_windows`
+4. leaf hotspot functions
+
+This keeps the conclusion aligned to the API server critical path instead of broad wrapper totals.

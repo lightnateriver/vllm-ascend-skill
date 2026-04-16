@@ -7,7 +7,7 @@
 - `vllm-ascend-use`
   面向 stock `vllm-ascend` 的通用实战工作流，覆盖架构理解、服务部署、性能测试和前 `LLM` 输入一致性验证。
 - `vllm-ascend-api-server-profiler`
-  面向 stock `vllm-ascend` OpenAI API server 的热点分析工作流，强调外置 monkey patch、请求级 profile 和可操作的 API server 结论。
+  面向 stock `vllm-ascend` OpenAI API server 的热点分析工作流，强调外置 monkey patch、请求级 profile、stage-based breakdown 与可操作的 API server 结论。
 
 ## 仓库结构
 
@@ -44,6 +44,7 @@
 
 - 如果任务是通用部署、benchmark 或输入一致性验证，优先使用 `vllm-ascend-use`
 - 如果任务是 API server 热点定位、timeline 生成或热点函数解释，优先使用 `vllm-ascend-api-server-profiler`
+- 如果任务已经进入“为什么合计时间对不上”的阶段，优先使用 `vllm-ascend-api-server-profiler`，因为它会先拆 `stage_spans`、再解释 `concurrency_windows` 和 stage gap
 
 ### 2. 从同一个 GitHub 仓库安装多个 skill
 
