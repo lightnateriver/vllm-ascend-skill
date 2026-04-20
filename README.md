@@ -2,12 +2,14 @@
 
 面向 `vllm + vllm-ascend` 的多 skill 仓库，当前聚焦 Ascend NPU 场景下的部署、测试与 API server 侧性能分析。
 
-这个仓库当前包含两个并列 skill：
+这个仓库当前包含三个并列 skill：
 
 - `vllm-ascend-use`
   面向 stock `vllm-ascend` 的通用实战工作流，覆盖架构理解、服务部署、性能测试和前 `LLM` 输入一致性验证。
 - `vllm-ascend-api-server-profiler`
   面向 stock `vllm-ascend` OpenAI API server 的热点分析工作流，强调外置 monkey patch、请求级 profile、stage-based breakdown，以及基于热点函数内部逻辑的多方案调优分析。
+- `vllm-multimodal-evaluator`
+  面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖本地图片和视频测试数据生成、Qwen3.5-4B 本地媒体部署，以及图片格式、Base64、多图、图文穿插、视频格式和视频时序理解 checklist。
 
 ## 仓库结构
 
@@ -16,6 +18,11 @@
 ├── README.md
 ├── vllm-ascend-use/
 │   ├── README.md
+│   ├── SKILL.md
+│   ├── agents/
+│   ├── references/
+│   └── scripts/
+├── vllm-multimodal-evaluator/
 │   ├── SKILL.md
 │   ├── agents/
 │   ├── references/
@@ -38,6 +45,7 @@
 - 需要比较两次部署在 `LLM` 前的输入是否一致
 - 需要分析 OpenAI API server 侧而不是 engine core / TP worker 侧的热点函数
 - 需要先拿到 API server 热点函数的多种调优方案，再决定后续实际优化路线
+- 需要生成规则化图像或视频测试数据，并对多模态服务做能力支持矩阵验证
 
 ## 使用建议
 
@@ -45,6 +53,7 @@
 
 - 如果任务是通用部署、benchmark 或输入一致性验证，优先使用 `vllm-ascend-use`
 - 如果任务是 API server 热点定位、timeline 生成或热点函数解释，优先使用 `vllm-ascend-api-server-profiler`
+- 如果任务是多模态能力评估、图片或视频支持矩阵验证，优先使用 `vllm-multimodal-evaluator`
 - 如果任务已经进入“为什么合计时间对不上”的阶段，优先使用 `vllm-ascend-api-server-profiler`，因为它会先拆 `stage_spans`、再解释 `concurrency_windows` 和 stage gap
 
 ### 2. 从同一个 GitHub 仓库安装多个 skill
@@ -59,6 +68,15 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 ```
 
 如果只安装其中一个，也可以只传单个 `--path`。
+
+如果要连同多模态能力评估 skill 一起安装，可以使用：
+
+```bash
+python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo lightnateriver/vllm-ascend-skill \
+  --path vllm-ascend-use vllm-multimodal-evaluator vllm-ascend-api-server-profiler \
+  --ref 0.18
+```
 
 ## 版本说明
 

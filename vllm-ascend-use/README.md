@@ -12,6 +12,7 @@
 - 对比两次部署在 `LLM` 前的输入是否一致
 
 如果任务明确是 API server 热点分析，请改用同仓库里的 `vllm-ascend-api-server-profiler`。
+如果任务明确是构造简单多模态测试数据并跑能力支持矩阵，请改用同仓库里的 `vllm-multimodal-evaluator`。可以把它视作本 skill 的配套子 skill。
 
 ## 能力概览
 
@@ -25,6 +26,8 @@
    支持生成 cache-safe 多模态测试集，并运行单并发 benchmark，输出 `TTFT`、`TPOT`、`E2E` 等指标。
 4. 精度验证
    默认以“`LLM` 前输入是否一致”为主判据，而不是要求最终文本输出完全一致。
+5. 多模态能力评估联动
+   当目标从“服务是否能跑起来”切换成“服务支持哪些图片和视频输入方式、格式和时序理解能力”时，交给 `vllm-multimodal-evaluator`。
 
 ## 目录结构
 
@@ -91,3 +94,4 @@ python -m vllm.entrypoints.openai.api_server
 - 部署说明：`references/deployment.md`
 - 性能测试说明：`references/performance-testing.md`
 - 精度测试说明：`references/accuracy-testing.md`
+- 配套子 skill：`../vllm-multimodal-evaluator/`

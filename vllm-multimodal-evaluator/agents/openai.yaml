@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Multimodal Evaluator"
+  short_description: "Generate fixtures and run multimodal capability checks"
+  default_prompt: "Use $vllm-multimodal-evaluator to generate deterministic image and video fixtures, start a local Qwen3.5 multimodal service if needed, and run the multimodal capability checklist with a PASS or FAIL report."

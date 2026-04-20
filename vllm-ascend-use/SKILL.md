@@ -26,6 +26,7 @@ Read the reference that matches the task:
 - Read [references/accuracy-testing.md](references/accuracy-testing.md) when validating pre-LLM input consistency.
 
 If the request is specifically about API server hotspot profiling, use the companion skill `vllm-ascend-api-server-profiler` instead of overloading this general skill.
+If the request is specifically about building simple local multimodal fixtures and running a capability support checklist, use the companion child skill `vllm-multimodal-evaluator`.
 
 ### 2. Prefer stock serving paths
 
@@ -54,6 +55,8 @@ The scripts are thin utilities intended to reduce repeated manual work:
   Send serial requests in fixed round order when you need a stable request driver for validation.
 - [scripts/compare_text_outputs.py](scripts/compare_text_outputs.py)
   Legacy helper for text-level comparison. Do not treat exact output match as a required accuracy signal for this skill.
+- Companion child skill: `vllm-multimodal-evaluator`
+  Use it when the task shifts from service deployment or benchmark generation to synthetic image or video fixture creation and multimodal capability matrix testing.
 
 ## Operating Rules
 
