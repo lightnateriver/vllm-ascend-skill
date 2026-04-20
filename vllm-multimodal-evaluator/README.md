@@ -34,6 +34,14 @@
 4. 能力 checklist 执行
    自动发起图片、视频、多图和图文穿插请求，并输出 Markdown 与 JSON 报告。
 
+## 默认测试策略
+
+- 所有 checklist 请求默认使用 `max_completion_tokens=512`。
+- 如果单个 case 未显式覆盖输出 token，上限仍然是 `512`。
+- Markdown 报告会记录每个 case 的完整 `/v1/chat/completions` 请求 Payload，包含文本输入、媒体 URL 或 Base64 数据、`model`、`temperature`、`stream` 和 `max_completion_tokens`。
+- Markdown 报告会记录每个 case 的完整模型输出，不再只保留截断预览。
+- JSON 报告会以结构化字段保存同样的完整请求输入和完整模型输出，便于后续程序化分析。
+
 ## 目录结构
 
 ```text
@@ -115,6 +123,21 @@ python scripts/run_multimodal_capability_tests.py \
 - `results/qwen35_multimodal_capability_report.md`
 - `results/qwen35_multimodal_capability_report.json`
 
+默认请求输出 token 上限为 `512`。如需临时调整默认值，可以传入：
+
+```bash
+python scripts/run_multimodal_capability_tests.py \
+  --base-url http://127.0.0.1:8000/v1 \
+  --model /path/to/Qwen3.5-4B \
+  --max-tokens 512
+```
+
+生成的 Markdown 报告包含三类信息：
+
+- 能力项汇总表，显示每个 case 的输入文件、输出 token 上限、HTTP 状态、PASS/FAIL 和耗时
+- 失败 case 明细
+- 完整 Case 输入与输出，包含完整请求 Payload 和完整模型回答
+
 ## checklist 覆盖范围
 
 当前脚本默认覆盖这些能力项：
@@ -135,10 +158,12 @@ python scripts/run_multimodal_capability_tests.py \
 - 请求是否构造错误
 - 本地媒体路径是否未放开
 - 服务是否成功接收媒体
-- 输出是否因为 `max_completion_tokens` 太小而被截断
+- 输出是否在 `512` token 上限下仍然被截断
 - 模型是否真的理解错了
 
 这一步在多图和视频 case 里尤其重要，因为它们比单图 case 更容易出现“答案接近正确但被截断”的假阴性。
+
+如果某个 case 的回答明显被截断，需要结合完整 Markdown 报告里的请求 Payload、完整输出和 JSON 里的原始结果判断问题来源，不要直接把它归类为媒体格式不支持。
 
 ## 相关文件
 

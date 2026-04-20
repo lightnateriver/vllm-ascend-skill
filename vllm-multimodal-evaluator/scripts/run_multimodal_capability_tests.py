@@ -70,7 +70,7 @@ class TestCase:
     files: list[Path] = field(default_factory=list)
     resolution: str = ""
     media_format: str = ""
-    max_completion_tokens: int = 128
+    max_completion_tokens: int = 512
 
 
 def mime_type_for(path: Path, media_type: str) -> str:
@@ -184,7 +184,7 @@ def build_cases(project_root: Path) -> list[TestCase]:
             files=multi_paths,
             resolution="720x1280",
             media_format="jpg",
-            max_completion_tokens=256,
+            max_completion_tokens=512,
         )
     )
     cases.append(
@@ -199,7 +199,7 @@ def build_cases(project_root: Path) -> list[TestCase]:
             files=multi_paths,
             resolution="720x1280",
             media_format="jpg",
-            max_completion_tokens=256,
+            max_completion_tokens=512,
         )
     )
 
@@ -247,7 +247,7 @@ def build_cases(project_root: Path) -> list[TestCase]:
             files=[first, second, third],
             resolution="720x1280",
             media_format="jpg",
-            max_completion_tokens=256,
+            max_completion_tokens=512,
         )
     )
 
@@ -435,6 +435,8 @@ def run_case(case: TestCase, base_url: str, model: str, timeout: float, default_
         "format": case.media_format,
         "files": [str(path.relative_to(Path.cwd())) for path in case.files],
         "prompt": case.prompt,
+        "request_payload": payload,
+        "max_completion_tokens": payload["max_completion_tokens"],
         "expected_groups": case.expected_groups,
         "group_matches": group_matches,
         "http_status": http_status,
@@ -453,6 +455,14 @@ def write_json(path: Path, data: Any) -> None:
 def escape_cell(value: Any) -> str:
     text = str(value).replace("\n", "<br>")
     return text.replace("|", "\\|")
+
+
+def fenced_json(value: Any) -> str:
+    return "```json\n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n```"
+
+
+def fenced_text(value: str) -> str:
+    return "````text\n" + value + "\n````"
 
 
 def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) -> str:
@@ -477,8 +487,8 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) ->
             [
                 f"## {category}",
                 "",
-                "| Case | 输入 | 预期命中组 | HTTP | 结果 | 耗时(s) | 备注 |",
-                "|---|---|---|---:|---|---:|---|",
+                "| Case | 输入文件 | 输出 Token 上限 | 预期命中组 | HTTP | 结果 | 耗时(s) | 备注 |",
+                "|---|---|---:|---|---:|---|---:|---|",
             ]
         )
         for result in [item for item in results if item["category"] == category]:
@@ -491,6 +501,7 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) ->
                     [
                         escape_cell(result["case_id"]),
                         escape_cell(files),
+                        escape_cell(result.get("max_completion_tokens")),
                         escape_cell(expected),
                         escape_cell(result["http_status"]),
                         escape_cell(result["status"]),
@@ -540,6 +551,37 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) ->
     if not failures:
         lines.append("| 无 | - | - | - |")
 
+    lines.extend(
+        [
+            "",
+            "## 完整 Case 输入与输出",
+            "",
+            "以下内容用于复现和排查。`请求 Payload` 是发送到 `/v1/chat/completions` 的完整 JSON 输入，包含 `messages`、媒体 URL 或 Base64 数据，以及 `max_completion_tokens`。",
+            "",
+        ]
+    )
+    for result in results:
+        lines.extend(
+            [
+                f"### {result['case_id']}",
+                "",
+                f"- 分类：{result['category']}",
+                f"- 状态：{result['status']}",
+                f"- HTTP：{result['http_status']}",
+                f"- 耗时(s)：{result['latency_seconds']}",
+                f"- 输出 Token 上限：{result.get('max_completion_tokens')}",
+                "",
+                "#### 请求 Payload",
+                "",
+                fenced_json(result.get("request_payload", {})),
+                "",
+                "#### 模型完整输出",
+                "",
+                fenced_text(result["model_output"]) if result["model_output"] else "（无输出）",
+                "",
+            ]
+        )
+
     lines.append("")
     return "\n".join(lines)
 
@@ -550,7 +592,7 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--timeout", type=float, default=120)
-    parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--results-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -592,6 +634,14 @@ def main() -> None:
                 "format": case.media_format,
                 "files": [str(path.relative_to(project_root)) for path in case.files],
                 "prompt": case.prompt,
+                "request_payload": {
+                    "model": args.model,
+                    "messages": [{"role": "user", "content": case.content}],
+                    "temperature": 0,
+                    "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
+                    "stream": False,
+                },
+                "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
                 "expected_groups": case.expected_groups,
                 "group_matches": [],
                 "http_status": None,
@@ -613,6 +663,14 @@ def main() -> None:
                 "format": case.media_format,
                 "files": [str(path.relative_to(project_root)) for path in case.files],
                 "prompt": case.prompt,
+                "request_payload": {
+                    "model": args.model,
+                    "messages": [{"role": "user", "content": case.content}],
+                    "temperature": 0,
+                    "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
+                    "stream": False,
+                },
+                "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
                 "expected_groups": case.expected_groups,
                 "group_matches": [],
                 "http_status": models_status,

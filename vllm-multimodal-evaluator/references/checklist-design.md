@@ -29,6 +29,12 @@ Examples:
 - full-sequence cases expect:
   - one synonym group per shape, in the fixed order
 
+## Output token budget
+
+The checklist uses `max_completion_tokens=512` by default for every request. This includes simple single-image cases, multi-image cases, interleaved text-plus-image cases, and video cases.
+
+Keep this default token budget unless a user explicitly asks for a different value. If a response is still truncated at 512 tokens, classify that as a prompt or generation-limit issue rather than a media-ingestion failure.
+
 ## Common false negatives
 
 The most common non-capability failure is output truncation.
@@ -42,7 +48,7 @@ Symptoms:
 Mitigation:
 
 - constrain the prompt to return only a comma-separated list
-- increase `max_completion_tokens` for multi-image and video cases
+- keep `max_completion_tokens` at 512 by default, and only increase it when a specific run still shows `finish_reason=length` or visibly truncated output
 
 ## Real capability gaps
 
@@ -63,3 +69,11 @@ Summaries should separate:
 - video sequence understanding support
 
 This distinction matters because a model may support a media format while still failing a harder reasoning question on top of that media.
+
+The Markdown report should include full reproduction detail for each case:
+
+- the full `/v1/chat/completions` request payload, including text content, media references or Base64 data, and `max_completion_tokens`
+- the full model output, not a truncated preview
+- the per-case output token limit shown in summary tables
+
+The JSON report should keep the same request payload and full output in structured fields.

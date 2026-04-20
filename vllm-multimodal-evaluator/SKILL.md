@@ -53,6 +53,8 @@ If the user wants you to start the model service as part of the evaluation, use 
 
 Use [scripts/run_multimodal_capability_tests.py](scripts/run_multimodal_capability_tests.py) to send the capability matrix to the target service and write a machine-readable plus human-readable report.
 
+The checklist uses `max_completion_tokens=512` by default for every case. Keep this default unless the user explicitly asks for a different output-token budget.
+
 The script covers:
 
 - image format support through local `file://` URLs
@@ -90,11 +92,21 @@ When reporting results, include:
 - PASS or FAIL counts by category
 - any residual failures that look like real capability gaps
 
+The Markdown report must keep enough information for reproduction and debugging:
+
+- summary tables by capability category
+- the output token limit used by each case
+- the full `/v1/chat/completions` request payload for every case, including text, media URL or Base64 data, and `max_completion_tokens`
+- the full model output for every case
+
+The JSON report stores the same request payload and full model output in machine-readable form.
+
 ## Operating Rules
 
 - Prefer deterministic synthetic fixtures over scraped or user-supplied media when the task is capability validation.
 - Keep the shape order fixed as `square, rectangle, rhombus, circle, triangle, cylinder, cube`.
 - Keep single-image prompts short, but constrain multi-image and video prompts to return only comma-separated lists or single labels.
+- Keep checklist output tokens at 512 by default. If a case still fails with `finish_reason=length` or a visibly truncated answer, report that separately instead of lowering the token budget.
 - For local media tests, treat missing `--allowed-local-media-path` as the first thing to rule out.
 - When a multi-image or video answer is close but incomplete, check whether the response was truncated before concluding the capability failed.
 - When the target service is already running, do not restart it unless the user asks or the current configuration blocks local media tests.
