@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM MM Precision"
+  short_description: "Run multimodal L0 and L1 regression tests"
+  default_prompt: "Use $vllm-multimodal-precision-testing to run the local multimodal regression stack, including L0 smoke plus L1 MME and MMBench checks."
