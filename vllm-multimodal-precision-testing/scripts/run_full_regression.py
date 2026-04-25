@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPT_DIR.parent
+DEFAULT_IMAGE_DIR = SKILL_DIR / "assets" / "l0" / "pics" / "720x1280" / "jpg"
+DEFAULT_VIDEO_PATH = SKILL_DIR / "assets" / "l0" / "video" / "720x1280" / "mp4" / "shapes.mp4"
 MME_URL = "https://opencompass.openxlab.space/utils/VLMEval/MME.tsv"
 MMBENCH_URL = "https://opencompass.openxlab.space/utils/benchmarks/MMBench/MMBench_DEV_EN.tsv"
 
@@ -21,11 +24,11 @@ def parse_args():
     parser.add_argument("--model", default="/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B")
     parser.add_argument(
         "--image-dir",
-        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/pics/720x1280/jpg",
+        default=str(DEFAULT_IMAGE_DIR),
     )
     parser.add_argument(
         "--video-path",
-        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/video/720x1280/mp4/shapes.mp4",
+        default=str(DEFAULT_VIDEO_PATH),
     )
     parser.add_argument("--mme-tsv", default="/tmp/MME.tsv")
     parser.add_argument("--mmbench-tsv", default="/tmp/MMBench_DEV_EN.tsv")

@@ -36,6 +36,8 @@
 4. 一键回归执行
    通过统一入口脚本，按 `L0 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果。
 
+此外，这个 skill 现在直接内置了 `L0` 的测试图片和视频资源，不再要求使用者额外准备固定几何图形素材目录。
+
 ## 目标用途
 
 这个 skill 适合下面几类场景：
@@ -94,6 +96,10 @@
 ├── SKILL.md
 ├── agents/
 │   └── openai.yaml
+├── assets/
+│   └── l0/
+│       ├── pics/720x1280/jpg/
+│       └── video/720x1280/mp4/
 └── scripts/
     ├── l0_multimodal_smoke.py
     ├── mme_eval_local.py
@@ -111,6 +117,8 @@
 
 - host: `http://127.0.0.1:8000`
 - model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
+- `L0` 图片目录：`assets/l0/pics/720x1280/jpg`
+- `L0` 视频路径：`assets/l0/video/720x1280/mp4/shapes.mp4`
 
 同时，回归请求默认依赖：
 
@@ -131,6 +139,17 @@
 ```bash
 python scripts/run_full_regression.py
 ```
+
+对于 `L0`，脚本默认直接使用 skill 自带媒体资源：
+
+- `circle.jpg`
+- `cube.jpg`
+- `cylinder.jpg`
+- `rectangle.jpg`
+- `rhombus.jpg`
+- `square.jpg`
+- `triangle.jpg`
+- `shapes.mp4`
 
 ### 3. 保留逐题输出件
 
@@ -170,6 +189,7 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 
 - Skill 定义：`SKILL.md`
 - UI 元信息：`agents/openai.yaml`
+- `L0` 资产目录：`assets/l0/`
 - `L0` 冒烟测试：`scripts/l0_multimodal_smoke.py`
 - `MME` 回归测试：`scripts/mme_eval_local.py`
 - `MMBench_DEV_EN` 回归测试：`scripts/mmbench_eval_local.py`

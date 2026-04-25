@@ -22,8 +22,8 @@ Default assumptions used by the bundled scripts:
 
 - host: `http://127.0.0.1:8000`
 - model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
-- image dir: `/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/pics/720x1280/jpg`
-- video path: `/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/video/720x1280/mp4/shapes.mp4`
+- image dir: `assets/l0/pics/720x1280/jpg`
+- video path: `assets/l0/video/720x1280/mp4/shapes.mp4`
 - MME TSV: `/tmp/MME.tsv`
 - MMBench TSV: `/tmp/MMBench_DEV_EN.tsv`
 
@@ -45,6 +45,15 @@ Catch obvious regressions in:
 - multi-image order handling
 - prompt following for short constrained answers
 - basic video understanding
+
+### Bundled Media
+
+This skill now bundles the finalized `L0` media assets inside the skill itself.
+
+- images: `assets/l0/pics/720x1280/jpg`
+- video: `assets/l0/video/720x1280/mp4/shapes.mp4`
+
+This means the default `L0` scripts no longer depend on an external `vllm_multimodal_evaluator` checkout just to find the smoke media.
 
 ### Run
 
@@ -293,6 +302,10 @@ Do not compare one run that used relaxed prompting against another run that used
 
 ## Resources
 
+- `assets/l0/pics/720x1280/jpg`
+  Bundled 7 fixed image cases used by the finalized L0 smoke suite.
+- `assets/l0/video/720x1280/mp4/shapes.mp4`
+  Bundled fixed video case used by the finalized L0 smoke suite.
 - `scripts/l0_multimodal_smoke.py`
   Run the finalized image plus video L0 smoke suite.
 - `scripts/mme_eval_local.py`
