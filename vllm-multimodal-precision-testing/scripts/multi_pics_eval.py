@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import json
 import re
@@ -16,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from media_input_utils import build_image_reference
 
 DEFAULT_DATASET_DIR = Path("multi-pics-datasets/cases")
 DEFAULT_OUTPUT_ROOT = Path("multi-pics-runs")
@@ -34,9 +34,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
         "--media-mode",
-        choices=["file_url", "base64"],
+        choices=["base64", "local_path", "http"],
         default="base64",
         help="How to send images to the endpoint.",
+    )
+    parser.add_argument(
+        "--media-base-url",
+        default="",
+        help="Base URL for local HTTP image serving, for example http://127.0.0.1:9000 .",
+    )
+    parser.add_argument(
+        "--media-root",
+        default="",
+        help="Local media root for http path mapping. Required for http mode.",
     )
     parser.add_argument("--case", default=None, help="Run only one case id like 01 or 40.")
     parser.add_argument(
@@ -103,18 +113,12 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     return metadata
 
 
-def make_image_part(image_path: str, media_mode: str) -> dict[str, Any]:
-    if media_mode == "file_url":
-        return {"type": "image_url", "image_url": {"url": f"file://{image_path}"}}
-    raw = Path(image_path).read_bytes()
-    encoded = base64.b64encode(raw).decode("ascii")
-    return {
-        "type": "image_url",
-        "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
-    }
-
-
-def build_messages(case_meta: dict[str, Any], media_mode: str) -> list[dict[str, Any]]:
+def build_messages(
+    case_meta: dict[str, Any],
+    media_mode: str,
+    media_root: str,
+    media_base_url: str,
+) -> list[dict[str, Any]]:
     system_prompt = (
         "You are a vision evaluation assistant. "
         "Follow the user instruction exactly. "
@@ -125,7 +129,15 @@ def build_messages(case_meta: dict[str, Any], media_mode: str) -> list[dict[str,
         {"type": "text", "text": case_meta["question"]},
     ]
     for image_path in case_meta["image_paths"]:
-        user_content.append(make_image_part(image_path, media_mode))
+        image_ref, _ = build_image_reference(
+            image_b64=None,
+            image_path=image_path,
+            media_mode=media_mode,
+            media_root=media_root,
+            media_base_url=media_base_url,
+            fallback_name=Path(image_path).name,
+        )
+        user_content.append({"type": "image_url", "image_url": {"url": image_ref}})
 
     return [
         {"role": "system", "content": system_prompt},
@@ -273,10 +285,12 @@ def run_case(
     timeout: float,
     strict_raw: bool,
     media_mode: str,
+    media_root: str,
+    media_base_url: str,
 ) -> dict[str, Any]:
     payload = {
         "model": model,
-        "messages": build_messages(case_meta, media_mode),
+        "messages": build_messages(case_meta, media_mode, media_root, media_base_url),
         "temperature": temperature,
         "max_completion_tokens": max_completion_tokens,
         "stream": False,
@@ -290,6 +304,7 @@ def run_case(
         "gold_answer": case_meta["answer"],
         "target": case_meta["target"],
         "images": case_meta["images"],
+        "media_mode": media_mode,
         "status": "unknown",
         "error_type": "unknown",
         "raw_prediction": "",
@@ -365,6 +380,9 @@ def summarize(results: list[dict[str, Any]], run_dir: Path, args: argparse.Names
         "dataset_dir": str(Path(args.dataset_dir).resolve()),
         "endpoint": args.endpoint,
         "model": args.model,
+        "media_mode": args.media_mode,
+        "media_root": args.media_root if args.media_mode != "base64" else "",
+        "media_base_url": args.media_base_url,
         "total": len(results),
         **counts,
         "accuracy": round(counts["correct"] / len(results), 4) if results else 0.0,
@@ -459,6 +477,8 @@ def main() -> int:
             timeout=args.timeout,
             strict_raw=args.strict_raw,
             media_mode=args.media_mode,
+            media_root=args.media_root,
+            media_base_url=args.media_base_url,
         )
         results.append(result)
         print(

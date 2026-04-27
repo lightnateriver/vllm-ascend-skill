@@ -9,6 +9,8 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from media_input_utils import add_media_mode_args, build_image_reference
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run MME against a local OpenAI-compatible endpoint.")
@@ -18,7 +20,7 @@ def parse_args():
     parser.add_argument("--api-key", default="sk-admin")
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--concurrency", type=int, default=16)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--limit", type=int, default=0, help="Optional row limit for debugging")
     parser.add_argument(
@@ -26,6 +28,7 @@ def parse_args():
         default="/mnt/sfs_turbo/codes/lzp/vllm-ascend-precision-testing/mme_runs/mme_qwen35_4b",
         help="Prefix for prediction/result files",
     )
+    add_media_mode_args(parser)
     return parser.parse_args()
 
 
@@ -94,7 +97,7 @@ class Client:
             "Authorization": f"Bearer {api_key}",
         }
 
-    def infer(self, question, image_b64):
+    def infer(self, question, image_ref):
         payload = {
             "model": self.model,
             "messages": [
@@ -102,7 +105,7 @@ class Client:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": question},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                        {"type": "image_url", "image_url": {"url": image_ref}},
                     ],
                 }
             ],
@@ -163,6 +166,19 @@ def main():
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
     rows = load_mme_rows(args.tsv, args.limit)
+    media_root = args.media_root or str(out_prefix.parent / "_media_cache" / "mme")
+    for row in rows:
+        image_ref, local_image_path = build_image_reference(
+            image_b64=row["image_b64"],
+            image_path=row["image_path"],
+            media_mode=args.media_mode,
+            media_root=media_root,
+            media_base_url=args.media_base_url,
+            fallback_name=f"mme/{row['image_path']}",
+        )
+        row["image_ref"] = image_ref
+        row["local_image_path"] = local_image_path
+
     client = Client(
         endpoint=args.endpoint,
         model=args.model,
@@ -175,13 +191,16 @@ def main():
     results = [None] * len(rows)
 
     def run_one(i, row):
-        prediction = client.infer(row["question"], row["image_b64"])
+        prediction = client.infer(row["question"], row["image_ref"])
         extracted = extract_yes_no(prediction)
         score = extracted == row["answer"]
         return i, {
             "index": row["index"],
             "category": row["category"],
             "image_path": row["image_path"],
+            "media_mode": args.media_mode,
+            "image_ref": row["image_ref"],
+            "local_image_path": row["local_image_path"],
             "question": row["question"],
             "answer": row["answer"],
             "prediction": prediction,
@@ -209,6 +228,9 @@ def main():
 
     summary = {
         "rows": len(pred_df),
+        "media_mode": args.media_mode,
+        "media_root": media_root if args.media_mode != "base64" else "",
+        "media_base_url": args.media_base_url,
         "exact_acc": float(pred_df["score"].mean() * 100),
         "unknown": int((pred_df["extracted"] == "Unknown").sum()),
         "pred_path": str(pred_path),

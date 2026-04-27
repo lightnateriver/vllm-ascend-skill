@@ -12,6 +12,7 @@ Use this skill to run the verified multimodal regression stack against a local O
 - `L0`: fixed smoke suite for 7 images plus 3 video checks
 - `L0.5`: deterministic `1` to `40` multi-image precision dataset
 - `L1`: broader benchmark checks with `MME` and `MMBench_DEV_EN`
+- shared media input modes: `base64`, `local_path`, and local `http`
 
 This skill is intended for repeatable post-tuning or post-deployment regression testing, not one-off demos.
 
@@ -36,6 +37,15 @@ All verified requests in this skill assume:
 ```
 
 If this flag is missing, short-answer and benchmark outputs may become verbose and unstable, which can invalidate extraction-based scoring.
+
+When testing input-link behavior, prefer using the new shared media-mode layer in the bundled scripts:
+
+- `--media-mode base64`
+- `--media-mode local_path`
+- `--media-mode http`
+
+For `local_path`, the served model process must allow the media root via `--allowed-local-media-path`.
+For `http`, use a local static server such as `http://127.0.0.1:9000`, not a remote host.
 
 ## L0 Smoke
 
@@ -67,7 +77,9 @@ python3 scripts/l0_multimodal_smoke.py \
   --host http://127.0.0.1:8000 \
   --model /path/to/model \
   --image-dir /path/to/pics/720x1280/jpg \
-  --video-path /path/to/video/720x1280/mp4/shapes.mp4
+  --video-path /path/to/video/720x1280/mp4/shapes.mp4 \
+  --media-mode local_path \
+  --media-root /path/to/media/root
 ```
 
 ### Pass Rule
@@ -123,6 +135,7 @@ python3 scripts/multi_pics_eval.py \
   --wait-ready \
   --endpoint http://127.0.0.1:8000/v1/chat/completions \
   --dataset-dir multi-pics-datasets/cases \
+  --media-mode local_path \
   --json
 ```
 
@@ -147,6 +160,12 @@ The bundled evaluator supports `--wait-ready` and should be used by default. Rea
 2. a minimal text `/v1/chat/completions` request also returns HTTP `200`
 
 This avoids false starts where the service is listening but still returns startup `502` responses.
+
+The same evaluator can also be used to compare transport modes without changing the scoring logic:
+
+- `base64` for data URI input
+- `local_path` for `file://` input
+- `http` for local URL input
 
 ### Result Interpretation
 
@@ -200,11 +219,12 @@ Do not use `L1` as the first signal when the service itself may be broken.
   `MMBench` should be forced to output only one uppercase option letter.
 - Judge by extraction, not by raw string equality to a verbose answer.
 - Keep the prompt policy stable across runs, or historical scores will not be comparable.
-- Keep model endpoint, prompt style, and concurrency stable when comparing tuning rounds.
+- Keep model endpoint, prompt style, media mode, and concurrency stable when comparing tuning rounds.
 - `MMBench_DEV_EN` contains circular variants and image references.
   Use the bundled script instead of ad hoc parsing.
 - A small number of extraction fallbacks such as `Unknown` or `Z` may still occur.
   Track them as a separate metric because they often indicate prompt-following drift rather than pure vision failure.
+- Current default L1 concurrency is `16`, based on the measured local-path speedup over `8`.
 
 ## One-Command Run
 
@@ -222,7 +242,9 @@ python3 scripts/run_full_regression.py \
   --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
   --mme-tsv /tmp/MME.tsv \
   --mmbench-tsv /tmp/MMBench_DEV_EN.tsv \
-  --concurrency 8 \
+  --concurrency 16 \
+  --media-mode local_path \
+  --media-root /path/to/media/root \
   --json
 ```
 
@@ -240,6 +262,9 @@ Optional flags:
 - `--skip-mme`
 - `--skip-mmbench`
 - `--no-auto-download`
+- `--media-mode`
+- `--media-root`
+- `--media-base-url`
 
 Output artifacts are preserved by the underlying scripts:
 
@@ -254,6 +279,8 @@ Output artifacts are preserved by the underlying scripts:
 - `MMBench`
   `*.pred_all.tsv` keeps every raw row and variant with `question`, `answer`, `prediction`, `extracted`, and `row_hit`.
   `*.pred.tsv` keeps the scored main rows with grouped `hit`.
+
+For `MME` and `MMBench`, the row outputs now also preserve transport metadata such as `media_mode`, `image_ref`, and `local_image_path`.
 
 ## L1 MME
 

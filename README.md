@@ -11,7 +11,7 @@
 - `vllm-multimodal-evaluator`
   面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖本地图片和视频测试数据生成、Qwen3.5-4B 本地媒体部署，以及图片格式、Base64、多图、图文穿插、视频格式和视频时序理解 checklist。
 - `vllm-multimodal-precision-testing`
-  面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0` 固定图片和视频冒烟测试、`L0.5` 的 `1~40` 张图多图精度测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试，适合在模型调优或部署变更后做快速、可重复的多模态精度检查。
+  面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0` 固定图片和视频冒烟测试、`L0.5` 的 `1~40` 张图多图精度测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试；现在统一支持 `base64`、`local_path` 和本地 `http` 三种输入方式，适合在模型调优或部署变更后做快速、可重复的多模态精度检查。
 
 ## 仓库结构
 
@@ -121,6 +121,7 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 - 用内置 `1~40` 张图数据集观察单请求多图定位与检索能力
 - 用 `MME` 做 yes/no 感知与推理回归
 - 用 `MMBench_DEV_EN` 做 MCQ 感知与推理回归
+- 用同一套脚本切换 `base64` / `local_path` / `http` 三种媒体输入链路
 - 保存逐题结果，便于分析某一次调优到底影响了哪些题型
 
 这个子 skill 现在还直接自带：
@@ -128,6 +129,7 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 - `L0` 冒烟测试图片和视频资源
 - `L0.5` 多图精度测试数据集
 - 多图测试脚本 `scripts/multi_pics_eval.py`
+- `MME` / `MMBench` / `L0` 共用的媒体输入抽象层
 
 其中多图测试脚本默认支持 readiness gating，要求：
 
@@ -135,6 +137,12 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 2. 一个最小 text chat 请求也返回 `200`
 
 这样可以避免服务启动早期的 `502` 噪声污染精度结果。
+
+同时，这个子 skill 当前的默认建议也已经固定下来：
+
+- `L1` 的 `MME` / `MMBench` 默认并发使用 `16`
+- `local_path` 模式要求服务启动时配置 `--allowed-local-media-path`
+- `http` 模式只建议使用本机静态服务，例如 `http://127.0.0.1:9000`
 
 推荐把它和 `vllm-multimodal-evaluator` 配套使用：
 

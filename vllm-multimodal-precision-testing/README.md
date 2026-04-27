@@ -37,7 +37,30 @@
 4. `MMBench_DEV_EN` 本地精度测试
    使用官方 `MMBench_DEV_EN.tsv` 执行 MCQ 字母抽取与近似官方 heuristic 的 grouped scoring，并保留逐题结果。
 5. 一键回归执行
-   通过统一入口脚本，按 `L0 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果。
+   通过统一入口脚本，按 `L0 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果，同时支持统一切换媒体输入方式。
+
+## 新增能力
+
+这次更新后，`L0`、`L0.5`、`MME` 和 `MMBench_DEV_EN` 都支持统一的三种媒体输入方式：
+
+- `base64`
+- `local_path`
+- `http`
+
+统一参数如下：
+
+- `--media-mode`
+  选择媒体输入方式。
+- `--media-root`
+  `local_path` / `http` 模式下的本地媒体根目录；当评测脚本需要把数据集里的 base64 素材落盘时，也会写到这里。
+- `--media-base-url`
+  `http` 模式下本地 HTTP 静态服务的基地址，例如 `http://127.0.0.1:9000`。
+
+默认建议：
+
+- `L0`、`MME`、`MMBench` 默认用 `local_path`
+- `L1` 默认并发改为 `16`
+- `http` 只建议使用本机静态服务，不建议依赖远端图床
 
 ## 目标用途
 
@@ -118,6 +141,7 @@
 │   └── cases/
 └── scripts/
     ├── l0_multimodal_smoke.py
+    ├── media_input_utils.py
     ├── multi_pics_eval.py
     ├── mme_eval_local.py
     ├── mmbench_eval_local.py
@@ -144,6 +168,26 @@
 "chat_template_kwargs": {"enable_thinking": false}
 ```
 
+如果要测试 `local_path`，服务启动时还需要带上：
+
+```bash
+--allowed-local-media-path /your/media/root
+```
+
+如果要测试 `http`，建议在本机起一个静态文件服务，例如：
+
+```bash
+python3 -m http.server 9000 --directory /your/media/root
+```
+
+然后把评测参数里的：
+
+- `--media-mode http`
+- `--media-root /your/media/root`
+- `--media-base-url http://127.0.0.1:9000`
+
+配套传进去。
+
 ### 2. 先跑 L0 再跑 L1
 
 推荐顺序：
@@ -159,6 +203,23 @@
 python scripts/run_full_regression.py
 ```
 
+如果要统一切换为三种媒体输入之一，可以直接用：
+
+```bash
+python scripts/run_full_regression.py \
+  --media-mode local_path \
+  --media-root /mnt/sfs_turbo/codes/lzp/vllm-ascend-precision-testing/l0_assets
+```
+
+或者：
+
+```bash
+python scripts/run_full_regression.py \
+  --media-mode http \
+  --media-root /mnt/sfs_turbo/codes/lzp/vllm-ascend-precision-testing/l0_assets \
+  --media-base-url http://127.0.0.1:9000
+```
+
 如果要单独跑多图测试，推荐使用：
 
 ```bash
@@ -166,6 +227,7 @@ python scripts/multi_pics_eval.py \
   --wait-ready \
   --endpoint http://127.0.0.1:8000/v1/chat/completions \
   --dataset-dir multi-pics-datasets/cases \
+  --media-mode local_path \
   --json
 ```
 
@@ -175,6 +237,15 @@ python scripts/multi_pics_eval.py \
 2. 一个最小 text chat 请求也返回 `200`
 
 只有两者都成功才开始正式评测，避免把服务启动期噪声误判成模型精度问题。
+
+### 2.5. 三种媒体输入的使用建议
+
+- `base64`
+  兼容性最好，适合做默认兜底，也最接近公开 benchmark 常见发法。
+- `local_path`
+  最适合验证本地文件直传链路，要求服务允许本地媒体路径访问。
+- `http`
+  最适合模拟“请求里传 URL”场景，建议只用本机 `127.0.0.1` 静态服务，避免远端网络波动污染精度结果。
 
 ### 3. 保留逐题输出件
 
@@ -191,6 +262,14 @@ python scripts/multi_pics_eval.py \
 - `MMBench`
   `*.pred_all.tsv` 保留每道题和每个 circular 变体的 `question`、`answer`、`prediction`、`extracted`、`row_hit`。
   `*.pred.tsv` 保留最终计分主样本。
+
+`MME` 和 `MMBench` 现在还会额外保留：
+
+- `media_mode`
+- `image_ref`
+- `local_image_path`
+
+这样后续分析时可以直接看出某一次分数对应的是 `base64`、`local_path` 还是 `http`。
 
 ### 4. 多图数据集设计
 
@@ -217,6 +296,36 @@ python multi-pics-datasets/generate_dataset.py
 - `timeout=0`
 
 这个例子说明，修复启动期误判后，多图测试能更干净地区分“服务异常”与“模型能力边界”。
+
+## 三种输入模式的参考结果
+
+下面是这次对 stock `Qwen3.5-4B` 的一组参考结果，可作为后续回归的对照基线：
+
+### L0
+
+- `base64`: `10/10`
+- `local_path`: `10/10`
+- `http`: `10/10`
+
+### L0.5
+
+- `base64`: `24/40`, `accuracy=0.6000`
+- `local_path`: `24/40`, `accuracy=0.6000`
+- `http`: `24/40`, `accuracy=0.6000`
+
+### MME
+
+- `base64`: `80.6234%`
+- `local_path`: `80.7077%`
+- `http`: `80.6655%`
+
+### MMBench_DEV_EN
+
+- `base64`: `82.5601%`
+- `local_path`: `82.9038%`
+- `http`: `82.7320%`
+
+从这组结果看，三种输入方式的精度差异很小，整体符合预期。后续若出现大幅偏移，更可能是输入链路或服务处理逻辑发生了变化。
 
 ## 安装与集成
 

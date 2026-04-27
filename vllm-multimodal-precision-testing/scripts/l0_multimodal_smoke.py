@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import subprocess
 import sys
+from pathlib import Path
+import urllib.error
+import urllib.request
+
+from media_input_utils import build_media_reference
 
 
-def build_cases(image_dir: str, video_path: str):
+def build_image_part(media_ref: str) -> dict:
+    return {"type": "image_url", "image_url": {"url": media_ref}}
+
+
+def build_video_part(media_ref: str) -> dict:
+    return {"type": "video_url", "video_url": {"url": media_ref}}
+
+
+def build_cases(image_refs: list[tuple[str, str]], video_ref: str):
     imgs = [
-        ("circle", f"{image_dir}/circle.jpg"),
-        ("cube", f"{image_dir}/cube.jpg"),
-        ("cylinder", f"{image_dir}/cylinder.jpg"),
-        ("rectangle", f"{image_dir}/rectangle.jpg"),
-        ("rhombus", f"{image_dir}/rhombus.jpg"),
-        ("square", f"{image_dir}/square.jpg"),
-        ("triangle", f"{image_dir}/triangle.jpg"),
+        ("circle", image_refs[0][0]),
+        ("cube", image_refs[1][0]),
+        ("cylinder", image_refs[2][0]),
+        ("rectangle", image_refs[3][0]),
+        ("rhombus", image_refs[4][0]),
+        ("square", image_refs[5][0]),
+        ("triangle", image_refs[6][0]),
     ]
 
     system_word = "Reply with exactly one lowercase English word and nothing else."
@@ -34,7 +46,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "What shape is in this image?"},
-                {"type": "image_url", "image_url": {"url": "file://" + imgs[0][1]}},
+                build_image_part(imgs[0][1]),
             ],
         },
         {
@@ -43,10 +55,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "There are 2 images. What shape is in image 2?"},
-                *(
-                    {"type": "image_url", "image_url": {"url": "file://" + p}}
-                    for _, p in imgs[:2]
-                ),
+                *(build_image_part(p) for _, p in imgs[:2]),
             ],
         },
         {
@@ -58,10 +67,7 @@ def build_cases(image_dir: str, video_path: str):
                     "type": "text",
                     "text": "There are 3 images. Return the shapes in order from image 1 to image 3.",
                 },
-                *(
-                    {"type": "image_url", "image_url": {"url": "file://" + p}}
-                    for _, p in imgs[:3]
-                ),
+                *(build_image_part(p) for _, p in imgs[:3]),
             ],
         },
         {
@@ -70,10 +76,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "There are 4 images. What shape is in image 4?"},
-                *(
-                    {"type": "image_url", "image_url": {"url": "file://" + p}}
-                    for _, p in imgs[:4]
-                ),
+                *(build_image_part(p) for _, p in imgs[:4]),
             ],
         },
         {
@@ -85,10 +88,7 @@ def build_cases(image_dir: str, video_path: str):
                     "type": "text",
                     "text": "There are 5 images. Give the image index of circle first and rhombus second.",
                 },
-                *(
-                    {"type": "image_url", "image_url": {"url": "file://" + p}}
-                    for _, p in imgs[:5]
-                ),
+                *(build_image_part(p) for _, p in imgs[:5]),
             ],
         },
         {
@@ -97,10 +97,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "There are 6 images. What shape is in image 6?"},
-                *(
-                    {"type": "image_url", "image_url": {"url": "file://" + p}}
-                    for _, p in imgs[:6]
-                ),
+                *(build_image_part(p) for _, p in imgs[:6]),
             ],
         },
         {
@@ -109,10 +106,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "There are 7 images. What shape is in image 7?"},
-                *(
-                    {"type": "image_url", "image_url": {"url": "file://" + p}}
-                    for _, p in imgs[:7]
-                ),
+                *(build_image_part(p) for _, p in imgs[:7]),
             ],
         },
         {
@@ -121,7 +115,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "What is the first shape that appears in the video?"},
-                {"type": "video_url", "video_url": {"url": "file://" + video_path}},
+                build_video_part(video_ref),
             ],
         },
         {
@@ -130,7 +124,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_word,
             "user": [
                 {"type": "text", "text": "What is the last shape that appears in the video?"},
-                {"type": "video_url", "video_url": {"url": "file://" + video_path}},
+                build_video_part(video_ref),
             ],
         },
         {
@@ -139,7 +133,7 @@ def build_cases(image_dir: str, video_path: str):
             "system": system_num,
             "user": [
                 {"type": "text", "text": "How many different shapes appear in the video?"},
-                {"type": "video_url", "video_url": {"url": "file://" + video_path}},
+                build_video_part(video_ref),
             ],
         },
     ]
@@ -157,35 +151,34 @@ def run_case(base_url: str, model: str, case: dict, max_completion_tokens: int) 
         "stream": False,
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    proc = subprocess.run(
-        [
-            "curl",
-            "-sS",
-            f"{base_url}/v1/chat/completions",
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            json.dumps(payload, ensure_ascii=False),
-        ],
-        capture_output=True,
-        text=True,
-    )
     rec = {
         "id": case["id"],
         "expected": case["expected"],
-        "returncode": proc.returncode,
-        "stderr": proc.stderr.strip(),
+        "returncode": 0,
+        "stderr": "",
     }
-    if proc.returncode != 0:
+    request = urllib.request.Request(
+        url=f"{base_url}/v1/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        finish_reason = data.get("choices", [{}])[0].get("finish_reason")
+        rec["content"] = content
+        rec["finish_reason"] = finish_reason
+        rec["pass"] = content.strip().lower() == case["expected"]
+    except urllib.error.HTTPError as exc:
+        rec["returncode"] = exc.code
+        rec["stderr"] = exc.read().decode("utf-8", errors="replace")
         rec["pass"] = False
-        return rec
-
-    data = json.loads(proc.stdout)
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    finish_reason = data.get("choices", [{}])[0].get("finish_reason")
-    rec["content"] = content
-    rec["finish_reason"] = finish_reason
-    rec["pass"] = content.strip().lower() == case["expected"]
+    except Exception as exc:  # noqa: BLE001
+        rec["returncode"] = 1
+        rec["stderr"] = repr(exc)
+        rec["pass"] = False
     return rec
 
 
@@ -203,11 +196,59 @@ def main() -> int:
         "--video-path",
         default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/video/720x1280/mp4/shapes.mp4",
     )
+    parser.add_argument(
+        "--media-mode",
+        choices=["base64", "local_path", "http"],
+        default="local_path",
+        help="How to send images and video to the endpoint.",
+    )
+    parser.add_argument(
+        "--media-base-url",
+        default="",
+        help="Base URL for local HTTP media serving, for example http://127.0.0.1:9000 .",
+    )
+    parser.add_argument(
+        "--media-root",
+        default="",
+        help="Local media root for HTTP path mapping. Required for http mode.",
+    )
     parser.add_argument("--max-completion-tokens", type=int, default=64)
     parser.add_argument("--json", action="store_true", help="Print only JSON results.")
     args = parser.parse_args()
 
-    cases = build_cases(args.image_dir, args.video_path)
+    image_paths = [
+        str(Path(args.image_dir) / "circle.jpg"),
+        str(Path(args.image_dir) / "cube.jpg"),
+        str(Path(args.image_dir) / "cylinder.jpg"),
+        str(Path(args.image_dir) / "rectangle.jpg"),
+        str(Path(args.image_dir) / "rhombus.jpg"),
+        str(Path(args.image_dir) / "square.jpg"),
+        str(Path(args.image_dir) / "triangle.jpg"),
+    ]
+    image_refs = [
+        build_media_reference(
+            encoded_payload=None,
+            source_path=image_path,
+            media_mode=args.media_mode,
+            media_root=args.media_root,
+            media_base_url=args.media_base_url,
+            fallback_name=Path(image_path).name,
+            fallback_suffix=".jpg",
+            fallback_mime="image/jpeg",
+        )
+        for image_path in image_paths
+    ]
+    video_ref, video_local_path = build_media_reference(
+        encoded_payload=None,
+        source_path=args.video_path,
+        media_mode=args.media_mode,
+        media_root=args.media_root,
+        media_base_url=args.media_base_url,
+        fallback_name=Path(args.video_path).name,
+        fallback_suffix=".mp4",
+        fallback_mime="video/mp4",
+    )
+    cases = build_cases(image_refs, video_ref)
     results = [
         run_case(args.host, args.model, case, args.max_completion_tokens)
         for case in cases
@@ -219,7 +260,13 @@ def main() -> int:
         print(
             json.dumps(
                 {
-                    "summary": {"passed": passed, "failed": failed, "total": len(results)},
+                    "summary": {
+                        "passed": passed,
+                        "failed": failed,
+                        "total": len(results),
+                        "media_mode": args.media_mode,
+                        "video_local_path": video_local_path,
+                    },
                     "results": results,
                 },
                 ensure_ascii=False,

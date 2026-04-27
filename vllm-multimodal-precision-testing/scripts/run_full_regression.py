@@ -31,8 +31,24 @@ def parse_args():
     parser.add_argument("--mmbench-tsv", default="/tmp/MMBench_DEV_EN.tsv")
     parser.add_argument("--api-key", default="sk-admin")
     parser.add_argument("--max-tokens", type=int, default=8, help="L1 benchmark max completion tokens")
-    parser.add_argument("--concurrency", type=int, default=8, help="L1 benchmark concurrency")
+    parser.add_argument("--concurrency", type=int, default=16, help="L1 benchmark concurrency")
     parser.add_argument("--timeout", type=int, default=180, help="L1 benchmark request timeout")
+    parser.add_argument(
+        "--media-mode",
+        choices=["base64", "local_path", "http"],
+        default="local_path",
+        help="How to send media for L0 and L1 image benchmarks.",
+    )
+    parser.add_argument(
+        "--media-root",
+        default="",
+        help="Local media root used for local_path/http modes. For local_path, serve must allow this path.",
+    )
+    parser.add_argument(
+        "--media-base-url",
+        default="",
+        help="Base URL for local HTTP media serving, for example http://127.0.0.1:9000 .",
+    )
     parser.add_argument("--skip-l0", action="store_true")
     parser.add_argument("--skip-mme", action="store_true")
     parser.add_argument("--skip-mmbench", action="store_true")
@@ -116,10 +132,16 @@ def main():
                     args.image_dir,
                     "--video-path",
                     args.video_path,
+                    "--media-mode",
+                    args.media_mode,
                     "--json",
                 ],
             )
         )
+        if args.media_root:
+            steps[-1][1].extend(["--media-root", args.media_root])
+        if args.media_base_url:
+            steps[-1][1].extend(["--media-base-url", args.media_base_url])
 
     endpoint = f"{args.host.rstrip('/')}/v1/chat/completions"
 
@@ -145,9 +167,15 @@ def main():
                     str(args.concurrency),
                     "--timeout",
                     str(args.timeout),
+                    "--media-mode",
+                    args.media_mode,
                 ],
             )
         )
+        if args.media_root:
+            steps[-1][1].extend(["--media-root", args.media_root])
+        if args.media_base_url:
+            steps[-1][1].extend(["--media-base-url", args.media_base_url])
 
     if not args.skip_mmbench:
         downloads.append(download_if_missing(args.mmbench_tsv, MMBENCH_URL, "mmbench", not args.no_auto_download))
@@ -171,9 +199,15 @@ def main():
                     str(args.concurrency),
                     "--timeout",
                     str(args.timeout),
+                    "--media-mode",
+                    args.media_mode,
                 ],
             )
         )
+        if args.media_root:
+            steps[-1][1].extend(["--media-root", args.media_root])
+        if args.media_base_url:
+            steps[-1][1].extend(["--media-base-url", args.media_base_url])
 
     step_results = []
     for name, cmd in steps:
