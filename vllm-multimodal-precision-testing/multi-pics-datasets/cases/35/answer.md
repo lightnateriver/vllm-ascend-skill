@@ -1,0 +1,43 @@
+# Case 35 Answer
+
+- Standard answer: `5`
+- Target shape: `rectangle`
+- Target color: `orange`
+- Target image index: `5`
+
+## Image Inventory
+- 01: `purple cylinder`
+- 02: `black square`
+- 03: `red rectangle`
+- 04: `brown cone`
+- 05: `orange rectangle`
+- 06: `blue rhombus`
+- 07: `brown cube`
+- 08: `yellow cube`
+- 09: `blue cylinder`
+- 10: `black cube`
+- 11: `green cone`
+- 12: `yellow circle`
+- 13: `green square`
+- 14: `pink cube`
+- 15: `red cube`
+- 16: `black rectangle`
+- 17: `brown triangle`
+- 18: `red triangle`
+- 19: `green triangle`
+- 20: `brown cylinder`
+- 21: `green rectangle`
+- 22: `white rhombus`
+- 23: `white triangle`
+- 24: `red cylinder`
+- 25: `purple triangle`
+- 26: `blue cube`
+- 27: `black triangle`
+- 28: `orange square`
+- 29: `brown rectangle`
+- 30: `black cylinder`
+- 31: `pink rectangle`
+- 32: `purple rhombus`
+- 33: `green circle`
+- 34: `orange circle`
+- 35: `blue square`

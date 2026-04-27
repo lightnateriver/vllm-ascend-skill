@@ -1,0 +1,46 @@
+# Case 38 Answer
+
+- Standard answer: `21`
+- Target shape: `cube`
+- Target color: `purple`
+- Target image index: `21`
+
+## Image Inventory
+- 01: `brown cone`
+- 02: `blue cube`
+- 03: `purple rectangle`
+- 04: `blue cone`
+- 05: `green square`
+- 06: `pink circle`
+- 07: `red rhombus`
+- 08: `yellow rectangle`
+- 09: `brown cylinder`
+- 10: `red triangle`
+- 11: `white cylinder`
+- 12: `pink triangle`
+- 13: `brown rhombus`
+- 14: `white square`
+- 15: `black rectangle`
+- 16: `red circle`
+- 17: `white cube`
+- 18: `orange triangle`
+- 19: `black circle`
+- 20: `white rectangle`
+- 21: `purple cube`
+- 22: `white cone`
+- 23: `purple circle`
+- 24: `orange cylinder`
+- 25: `red square`
+- 26: `yellow cylinder`
+- 27: `orange rhombus`
+- 28: `purple rhombus`
+- 29: `yellow cone`
+- 30: `black rhombus`
+- 31: `pink cube`
+- 32: `green cylinder`
+- 33: `blue triangle`
+- 34: `green rhombus`
+- 35: `blue rhombus`
+- 36: `pink rhombus`
+- 37: `green rectangle`
+- 38: `pink cone`

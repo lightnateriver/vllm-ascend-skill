@@ -1,0 +1,47 @@
+# Case 39 Answer
+
+- Standard answer: `38`
+- Target shape: `cylinder`
+- Target color: `blue`
+- Target image index: `38`
+
+## Image Inventory
+- 01: `yellow cone`
+- 02: `black rectangle`
+- 03: `black cube`
+- 04: `blue triangle`
+- 05: `blue rhombus`
+- 06: `white rhombus`
+- 07: `pink circle`
+- 08: `red square`
+- 09: `brown circle`
+- 10: `orange square`
+- 11: `orange rectangle`
+- 12: `black circle`
+- 13: `purple cone`
+- 14: `red cube`
+- 15: `red circle`
+- 16: `white triangle`
+- 17: `brown rhombus`
+- 18: `orange rhombus`
+- 19: `black cone`
+- 20: `white cube`
+- 21: `blue cone`
+- 22: `pink rectangle`
+- 23: `orange triangle`
+- 24: `pink cube`
+- 25: `yellow triangle`
+- 26: `black triangle`
+- 27: `brown cube`
+- 28: `white cone`
+- 29: `yellow square`
+- 30: `yellow circle`
+- 31: `pink square`
+- 32: `white rectangle`
+- 33: `green rectangle`
+- 34: `purple cylinder`
+- 35: `purple rhombus`
+- 36: `black square`
+- 37: `green circle`
+- 38: `blue cylinder`
+- 39: `blue cube`

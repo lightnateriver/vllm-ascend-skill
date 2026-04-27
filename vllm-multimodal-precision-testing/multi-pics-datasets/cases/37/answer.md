@@ -1,0 +1,45 @@
+# Case 37 Answer
+
+- Standard answer: `5`
+- Target shape: `rhombus`
+- Target color: `pink`
+- Target image index: `5`
+
+## Image Inventory
+- 01: `blue rhombus`
+- 02: `purple cylinder`
+- 03: `red rectangle`
+- 04: `green rhombus`
+- 05: `pink rhombus`
+- 06: `white square`
+- 07: `green square`
+- 08: `blue cone`
+- 09: `green triangle`
+- 10: `red square`
+- 11: `white cone`
+- 12: `brown cylinder`
+- 13: `red cube`
+- 14: `black rectangle`
+- 15: `orange rhombus`
+- 16: `brown cube`
+- 17: `blue square`
+- 18: `pink square`
+- 19: `black rhombus`
+- 20: `black cylinder`
+- 21: `white rhombus`
+- 22: `yellow cylinder`
+- 23: `red triangle`
+- 24: `white cylinder`
+- 25: `orange square`
+- 26: `purple cube`
+- 27: `white circle`
+- 28: `pink rectangle`
+- 29: `purple cone`
+- 30: `orange triangle`
+- 31: `orange cylinder`
+- 32: `purple circle`
+- 33: `brown triangle`
+- 34: `pink triangle`
+- 35: `red circle`
+- 36: `yellow square`
+- 37: `green rectangle`

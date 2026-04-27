@@ -1,0 +1,27 @@
+{
+  "case_id": 2,
+  "image_count": 2,
+  "question_type": "index",
+  "question": "Which image is the brown cylinder? Answer only one number.",
+  "answer": "2",
+  "target": {
+    "index": 2,
+    "shape": "cylinder",
+    "color": "brown",
+    "filename": "02_brown_cylinder.jpg"
+  },
+  "images": [
+    {
+      "index": 1,
+      "shape": "square",
+      "color": "yellow",
+      "filename": "01_yellow_square.jpg"
+    },
+    {
+      "index": 2,
+      "shape": "cylinder",
+      "color": "brown",
+      "filename": "02_brown_cylinder.jpg"
+    }
+  ]
+}

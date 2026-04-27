@@ -1,0 +1,44 @@
+# Case 36 Answer
+
+- Standard answer: `6`
+- Target shape: `circle`
+- Target color: `pink`
+- Target image index: `6`
+
+## Image Inventory
+- 01: `red triangle`
+- 02: `white cone`
+- 03: `yellow cube`
+- 04: `yellow square`
+- 05: `green circle`
+- 06: `pink circle`
+- 07: `green cylinder`
+- 08: `pink cube`
+- 09: `brown triangle`
+- 10: `orange triangle`
+- 11: `white cylinder`
+- 12: `brown rhombus`
+- 13: `red cone`
+- 14: `red cylinder`
+- 15: `red rhombus`
+- 16: `red square`
+- 17: `blue square`
+- 18: `purple triangle`
+- 19: `pink rectangle`
+- 20: `white rhombus`
+- 21: `blue triangle`
+- 22: `blue cone`
+- 23: `orange circle`
+- 24: `brown circle`
+- 25: `brown cube`
+- 26: `green square`
+- 27: `black square`
+- 28: `white rectangle`
+- 29: `red circle`
+- 30: `green rectangle`
+- 31: `red rectangle`
+- 32: `green cone`
+- 33: `yellow circle`
+- 34: `blue cylinder`
+- 35: `brown cone`
+- 36: `purple rectangle`

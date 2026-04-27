@@ -11,7 +11,7 @@
 - `vllm-multimodal-evaluator`
   面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖本地图片和视频测试数据生成、Qwen3.5-4B 本地媒体部署，以及图片格式、Base64、多图、图文穿插、视频格式和视频时序理解 checklist。
 - `vllm-multimodal-precision-testing`
-  面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖内置 `L0` 固定图片和视频冒烟测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试，适合在模型调优或部署变更后做快速、可重复的多模态精度检查。
+  面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0` 固定图片和视频冒烟测试、`L0.5` 的 `1~40` 张图多图精度测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试，适合在模型调优或部署变更后做快速、可重复的多模态精度检查。
 
 ## 仓库结构
 
@@ -34,6 +34,8 @@
 │   ├── README.md
 │   ├── SKILL.md
 │   ├── agents/
+│   ├── assets/
+│   ├── multi-pics-datasets/
 │   └── scripts/
 └── vllm-ascend-api-server-profiler/
     ├── README.md
@@ -54,7 +56,7 @@
 - 需要分析 OpenAI API server 侧而不是 engine core / TP worker 侧的热点函数
 - 需要先拿到 API server 热点函数的多种调优方案，再决定后续实际优化路线
 - 需要生成规则化图像或视频测试数据，并对多模态服务做能力支持矩阵验证
-- 需要在模型调优后执行固定冒烟用例和 `MME` / `MMBench` 回归测试
+- 需要在模型调优后执行固定冒烟用例、多图 `1~40` 回归，以及 `MME` / `MMBench` 回归测试
 - 需要保留逐题问题、标准答案、模型回答和抽取结果，便于后续误差分析
 
 ## 使用建议
@@ -116,10 +118,23 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 它的核心用途包括：
 
 - 用固定 `L0` 图片和视频 case 快速发现明显退化
-- skill 自带 `L0` 冒烟测试所需图片和视频资源，安装后可直接运行
+- 用内置 `1~40` 张图数据集观察单请求多图定位与检索能力
 - 用 `MME` 做 yes/no 感知与推理回归
 - 用 `MMBench_DEV_EN` 做 MCQ 感知与推理回归
 - 保存逐题结果，便于分析某一次调优到底影响了哪些题型
+
+这个子 skill 现在还直接自带：
+
+- `L0` 冒烟测试图片和视频资源
+- `L0.5` 多图精度测试数据集
+- 多图测试脚本 `scripts/multi_pics_eval.py`
+
+其中多图测试脚本默认支持 readiness gating，要求：
+
+1. `/v1/models` 返回 `200`
+2. 一个最小 text chat 请求也返回 `200`
+
+这样可以避免服务启动早期的 `502` 噪声污染精度结果。
 
 推荐把它和 `vllm-multimodal-evaluator` 配套使用：
 

@@ -10,6 +10,7 @@ description: Run layered multimodal precision regression tests for local vLLM or
 Use this skill to run the verified multimodal regression stack against a local OpenAI-compatible service.
 
 - `L0`: fixed smoke suite for 7 images plus 3 video checks
+- `L0.5`: deterministic `1` to `40` multi-image precision dataset
 - `L1`: broader benchmark checks with `MME` and `MMBench_DEV_EN`
 
 This skill is intended for repeatable post-tuning or post-deployment regression testing, not one-off demos.
@@ -24,6 +25,7 @@ Default assumptions used by the bundled scripts:
 - model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
 - image dir: `assets/l0/pics/720x1280/jpg`
 - video path: `assets/l0/video/720x1280/mp4/shapes.mp4`
+- multi-pics dataset dir: `multi-pics-datasets/cases`
 - MME TSV: `/tmp/MME.tsv`
 - MMBench TSV: `/tmp/MMBench_DEV_EN.tsv`
 
@@ -45,15 +47,6 @@ Catch obvious regressions in:
 - multi-image order handling
 - prompt following for short constrained answers
 - basic video understanding
-
-### Bundled Media
-
-This skill now bundles the finalized `L0` media assets inside the skill itself.
-
-- images: `assets/l0/pics/720x1280/jpg`
-- video: `assets/l0/video/720x1280/mp4/shapes.mp4`
-
-This means the default `L0` scripts no longer depend on an external `vllm_multimodal_evaluator` checkout just to find the smoke media.
 
 ### Run
 
@@ -94,6 +87,92 @@ python3 scripts/l0_multimodal_smoke.py \
 - `video-first` -> `square`
 - `video-last` -> `cube`
 - `video-count` -> `7`
+
+## L0.5 Multi-Pics
+
+### Goal
+
+Catch regressions that only appear when one request carries many images.
+
+- single-request multi-image retrieval
+- target index binding
+- order sensitivity under image counts from `1` to `40`
+- short constrained answering under heavier visual context
+
+### Bundled Dataset
+
+This skill now bundles a deterministic multi-image dataset:
+
+- dataset root: `multi-pics-datasets/cases`
+- generator: `multi-pics-datasets/generate_dataset.py`
+- evaluator: `scripts/multi_pics_eval.py`
+
+Dataset rules:
+
+- case `01` contains `1` image and asks a strict `YES` or `NO` question
+- cases `02` to `40` contain exactly `N` images and ask for exactly one target image index
+- shape and color combinations are unique within one case
+- a shape may repeat in one case, but repeated shapes always use different colors
+
+### Run
+
+Full run:
+
+```bash
+python3 scripts/multi_pics_eval.py \
+  --wait-ready \
+  --endpoint http://127.0.0.1:8000/v1/chat/completions \
+  --dataset-dir multi-pics-datasets/cases \
+  --json
+```
+
+Single case:
+
+```bash
+python3 scripts/multi_pics_eval.py \
+  --wait-ready \
+  --case 40 \
+  --endpoint http://127.0.0.1:8000/v1/chat/completions \
+  --dataset-dir multi-pics-datasets/cases \
+  --json
+```
+
+### Readiness Policy
+
+Do not start this evaluation only because HTTP is reachable.
+
+The bundled evaluator supports `--wait-ready` and should be used by default. Readiness must require:
+
+1. `/v1/models` returns HTTP `200`
+2. a minimal text `/v1/chat/completions` request also returns HTTP `200`
+
+This avoids false starts where the service is listening but still returns startup `502` responses.
+
+### Result Interpretation
+
+The evaluator reports:
+
+- `correct`
+- `wrong`
+- `unknown`
+- `timeout`
+- `accuracy`
+
+Artifacts are written under `multi-pics-runs/<run_name>/`:
+
+- `01.json` to `40.json`
+- `summary.json`
+- `summary.csv`
+
+Each case artifact keeps:
+
+- question
+- gold answer
+- target image metadata
+- image inventory
+- raw model output
+- extracted prediction
+- final scoring status
 
 ## L1 Benchmarks
 
@@ -166,6 +245,10 @@ Output artifacts are preserved by the underlying scripts:
 
 - `L0`
   JSON output includes every fixed case and its returned content.
+- `L0.5`
+  `multi-pics-runs/<run_name>/summary.json` keeps the full run summary and all case details.
+  `multi-pics-runs/<run_name>/<case>.json` keeps each case question, gold answer, prediction, extracted result, and status.
+  `multi-pics-runs/<run_name>/summary.csv` keeps one scored row per case.
 - `MME`
   `*.pred.tsv` keeps one row per question with `question`, `answer`, `prediction`, `extracted`, and `score`.
 - `MMBench`
@@ -302,12 +385,10 @@ Do not compare one run that used relaxed prompting against another run that used
 
 ## Resources
 
-- `assets/l0/pics/720x1280/jpg`
-  Bundled 7 fixed image cases used by the finalized L0 smoke suite.
-- `assets/l0/video/720x1280/mp4/shapes.mp4`
-  Bundled fixed video case used by the finalized L0 smoke suite.
 - `scripts/l0_multimodal_smoke.py`
   Run the finalized image plus video L0 smoke suite.
+- `scripts/multi_pics_eval.py`
+  Run the deterministic `1` to `40` multi-image precision dataset with readiness gating and extraction-based scoring.
 - `scripts/mme_eval_local.py`
   Run local `MME` with extraction-based scoring and official-style aggregation.
 - `scripts/mmbench_eval_local.py`

@@ -12,6 +12,7 @@
 这是一个面向多模态模型回归测试的标准 skill，支持对本地服务执行：
 
 - `L0` 固定图片与视频冒烟测试
+- `L0.5` 固定 `1~40` 张图多图精度测试
 - `L1` 基于 `MME` 和 `MMBench_DEV_EN` 的更全面精度测试
 
 它强调：
@@ -25,18 +26,18 @@
 
 ## 功能说明
 
-这个 skill 当前提供四类能力：
+这个 skill 当前提供五类能力：
 
 1. `L0` 多模态冒烟测试
    使用固定的 7 张图片和 1 个视频做短答案回归，快速捕获明显功能退化。
-2. `MME` 本地精度测试
+2. `L0.5` 多图精度测试
+   使用内置的 `1~40` 张图数据集，检查单请求多图检索、目标定位和短答案输出稳定性，并保留逐 case 结果。
+3. `MME` 本地精度测试
    使用官方 `MME.tsv` 执行 yes/no 抽取判分，并输出逐题结果与汇总分数。
-3. `MMBench_DEV_EN` 本地精度测试
+4. `MMBench_DEV_EN` 本地精度测试
    使用官方 `MMBench_DEV_EN.tsv` 执行 MCQ 字母抽取与近似官方 heuristic 的 grouped scoring，并保留逐题结果。
-4. 一键回归执行
+5. 一键回归执行
    通过统一入口脚本，按 `L0 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果。
-
-此外，这个 skill 现在直接内置了 `L0` 的测试图片和视频资源，不再要求使用者额外准备固定几何图形素材目录。
 
 ## 目标用途
 
@@ -63,6 +64,17 @@
 - 多图顺序理解错误
 - 短约束回答失效
 - 基本视频理解异常
+
+### L0.5 Multi-Pics
+
+目标是补上 `L0` 和 `L1` 之间的一层多图定位回归，重点观察：
+
+- 单请求携带 `1~40` 张图片时的识别稳定性
+- 目标颜色和形状的联合检索能力
+- 第几张图定位能力
+- 高图数场景下的顺序偏移和近邻误判
+
+这套数据集采用规则化二维/三维几何图形，适合作为每次调优后的固定回归集。
 
 ### L1 MME
 
@@ -100,8 +112,13 @@
 │   └── l0/
 │       ├── pics/720x1280/jpg/
 │       └── video/720x1280/mp4/
+├── multi-pics-datasets/
+│   ├── README.md
+│   ├── generate_dataset.py
+│   └── cases/
 └── scripts/
     ├── l0_multimodal_smoke.py
+    ├── multi_pics_eval.py
     ├── mme_eval_local.py
     ├── mmbench_eval_local.py
     └── run_full_regression.py
@@ -119,6 +136,7 @@
 - model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
 - `L0` 图片目录：`assets/l0/pics/720x1280/jpg`
 - `L0` 视频路径：`assets/l0/video/720x1280/mp4/shapes.mp4`
+- 多图数据集目录：`multi-pics-datasets/cases`
 
 同时，回归请求默认依赖：
 
@@ -131,8 +149,9 @@
 推荐顺序：
 
 1. 先跑 `L0`
-2. 再跑 `MME`
-3. 最后跑 `MMBench_DEV_EN`
+2. 再跑 `L0.5` 多图测试
+3. 再跑 `MME`
+4. 最后跑 `MMBench_DEV_EN`
 
 如果只是想一键执行，直接使用：
 
@@ -140,16 +159,22 @@
 python scripts/run_full_regression.py
 ```
 
-对于 `L0`，脚本默认直接使用 skill 自带媒体资源：
+如果要单独跑多图测试，推荐使用：
 
-- `circle.jpg`
-- `cube.jpg`
-- `cylinder.jpg`
-- `rectangle.jpg`
-- `rhombus.jpg`
-- `square.jpg`
-- `triangle.jpg`
-- `shapes.mp4`
+```bash
+python scripts/multi_pics_eval.py \
+  --wait-ready \
+  --endpoint http://127.0.0.1:8000/v1/chat/completions \
+  --dataset-dir multi-pics-datasets/cases \
+  --json
+```
+
+这里建议始终带上 `--wait-ready`。因为真实实践里服务启动早期可能已经能连通 HTTP，但仍返回 `502`。这个脚本会先确认：
+
+1. `/v1/models` 返回 `200`
+2. 一个最小 text chat 请求也返回 `200`
+
+只有两者都成功才开始正式评测，避免把服务启动期噪声误判成模型精度问题。
 
 ### 3. 保留逐题输出件
 
@@ -157,11 +182,41 @@ python scripts/run_full_regression.py
 
 - `L0`
   JSON 输出会保留每个固定 case 的请求结果和返回内容。
+- `L0.5`
+  `multi-pics-runs/<run_name>/summary.json` 会保留整轮汇总和全部 case 明细。
+  `multi-pics-runs/<run_name>/summary.csv` 会保留每个 case 的计分结果。
+  `multi-pics-runs/<run_name>/<case>.json` 会保留题目、标准答案、原始回答、抽取结果和最终状态。
 - `MME`
   `*.pred.tsv` 保留每道题的 `question`、`answer`、`prediction`、`extracted`、`score`。
 - `MMBench`
   `*.pred_all.tsv` 保留每道题和每个 circular 变体的 `question`、`answer`、`prediction`、`extracted`、`row_hit`。
   `*.pred.tsv` 保留最终计分主样本。
+
+### 4. 多图数据集设计
+
+内置多图数据集位于 `multi-pics-datasets/`，是一个确定性的 `1~40` 张图回归集：
+
+- `01` 目录只有 `1` 张图，题目是封闭式 `YES` / `NO`
+- `02` 到 `40` 目录分别包含 `N` 张图，题目是“第几张图是某种颜色某种形状”，只允许回答 `1` 个数字
+- 同一 case 内，颜色和形状组合唯一
+- 同一 case 内允许形状重复，但重复形状的颜色不会重复
+- 每个 case 都提供 `question.md`、`answer.md`、`answer.json` 和对应图片
+
+如果要重建这套数据集，可以执行：
+
+```bash
+python multi-pics-datasets/generate_dataset.py
+```
+
+这套数据集适合观察高图数条件下的真实能力边界。以当前 stock `Qwen3.5-4B` 在原生 `vllm-ascend` 服务上的一次完整测试为例，曾得到：
+
+- `total=40`
+- `correct=24`
+- `wrong=16`
+- `unknown=0`
+- `timeout=0`
+
+这个例子说明，修复启动期误判后，多图测试能更干净地区分“服务异常”与“模型能力边界”。
 
 ## 安装与集成
 
@@ -189,8 +244,10 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 
 - Skill 定义：`SKILL.md`
 - UI 元信息：`agents/openai.yaml`
-- `L0` 资产目录：`assets/l0/`
+- `L0` 资源：`assets/l0/`
+- 多图数据集：`multi-pics-datasets/`
 - `L0` 冒烟测试：`scripts/l0_multimodal_smoke.py`
+- 多图精度测试：`scripts/multi_pics_eval.py`
 - `MME` 回归测试：`scripts/mme_eval_local.py`
 - `MMBench_DEV_EN` 回归测试：`scripts/mmbench_eval_local.py`
 - 一键回归入口：`scripts/run_full_regression.py`

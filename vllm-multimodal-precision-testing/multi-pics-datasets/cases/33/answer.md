@@ -1,0 +1,41 @@
+# Case 33 Answer
+
+- Standard answer: `20`
+- Target shape: `cone`
+- Target color: `red`
+- Target image index: `20`
+
+## Image Inventory
+- 01: `green rhombus`
+- 02: `green square`
+- 03: `white rectangle`
+- 04: `orange rectangle`
+- 05: `pink circle`
+- 06: `orange square`
+- 07: `pink rectangle`
+- 08: `red rhombus`
+- 09: `red circle`
+- 10: `orange cone`
+- 11: `green triangle`
+- 12: `red square`
+- 13: `blue square`
+- 14: `blue cone`
+- 15: `yellow triangle`
+- 16: `brown cone`
+- 17: `purple cone`
+- 18: `white circle`
+- 19: `pink cube`
+- 20: `red cone`
+- 21: `blue triangle`
+- 22: `black triangle`
+- 23: `red cube`
+- 24: `brown square`
+- 25: `purple rectangle`
+- 26: `orange circle`
+- 27: `brown rhombus`
+- 28: `brown triangle`
+- 29: `green circle`
+- 30: `yellow circle`
+- 31: `purple cylinder`
+- 32: `blue cube`
+- 33: `brown cube`

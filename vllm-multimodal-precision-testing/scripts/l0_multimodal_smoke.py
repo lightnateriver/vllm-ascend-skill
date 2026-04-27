@@ -3,13 +3,6 @@ import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
-
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-SKILL_DIR = SCRIPT_DIR.parent
-DEFAULT_IMAGE_DIR = SKILL_DIR / "assets" / "l0" / "pics" / "720x1280" / "jpg"
-DEFAULT_VIDEO_PATH = SKILL_DIR / "assets" / "l0" / "video" / "720x1280" / "mp4" / "shapes.mp4"
 
 
 def build_cases(image_dir: str, video_path: str):
@@ -204,11 +197,11 @@ def main() -> int:
     parser.add_argument("--model", default="/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B")
     parser.add_argument(
         "--image-dir",
-        default=str(DEFAULT_IMAGE_DIR),
+        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/pics/720x1280/jpg",
     )
     parser.add_argument(
         "--video-path",
-        default=str(DEFAULT_VIDEO_PATH),
+        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/video/720x1280/mp4/shapes.mp4",
     )
     parser.add_argument("--max-completion-tokens", type=int, default=64)
     parser.add_argument("--json", action="store_true", help="Print only JSON results.")
