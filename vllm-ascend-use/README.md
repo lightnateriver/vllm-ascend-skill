@@ -27,7 +27,9 @@
 4. 精度验证
    默认以“`LLM` 前输入是否一致”为主判据，而不是要求最终文本输出完全一致。
 5. 多模态能力评估联动
-   当目标从“服务是否能跑起来”切换成“服务支持哪些图片和视频输入方式、格式和时序理解能力”时，交给 `vllm-multimodal-evaluator`。
+   当目标从"服务是否能跑起来"切换成"服务支持哪些图片和视频输入方式、格式和时序理解能力"时，交给 `vllm-multimodal-evaluator`。
+6. Function Calling 能力测试
+   仓库中的 `vllm-multimodal-evaluator` 也提供了 function calling 标准测试集（15个用例），覆盖函数名匹配、必选参数完整性、并行调用和多轮对话上下文保持。详见其 README。
 
 ## 目录结构
 

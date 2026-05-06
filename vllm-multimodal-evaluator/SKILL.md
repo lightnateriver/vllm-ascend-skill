@@ -66,9 +66,25 @@ The script covers:
 - video resolution support
 - video first-shape, last-shape, and ordered-sequence checks
 
+### 5. Run the Function Calling checklist
+
+Use [scripts/fc_test.py](scripts/fc_test.py) against a service started with `--enable-auto-tool-choice --tool-call-parser qwen3_xml`.
+
+The script reads [scripts/function_calling_test.json](scripts/function_calling_test.json) which contains 15 test cases covering:
+
+- single function call with required parameters
+- parallel tool calls
+- missing-parameter scenarios (small models may fill defaults instead of asking)
+- multi-turn context-dependent calls
+- no-call scenarios (casual chat)
+- fuzzy/invalid parameter handling
+- long-text interference extraction
+
+Evaluation is relaxed: only check function name match and required parameter existence, not exact string values.
+
 Read [references/checklist-design.md](references/checklist-design.md) when you need to adjust prompts, expected groups, or PASS or FAIL interpretation.
 
-### 5. Interpret failures carefully
+### 6. Interpret failures carefully
 
 Do not treat every FAIL as an unsupported media type.
 
@@ -121,6 +137,10 @@ The JSON report stores the same request payload and full model output in machine
   Start a stock `vllm serve` flow for `Qwen3.5-4B` on Ascend with local media enabled.
 - [scripts/run_multimodal_capability_tests.py](scripts/run_multimodal_capability_tests.py)
   Run the checklist and emit Markdown plus JSON reports.
+- [scripts/function_calling_test.json](scripts/function_calling_test.json)
+  15 standard test cases for Function Calling evaluation.
+- [scripts/fc_test.py](scripts/fc_test.py)
+  Run the Function Calling test suite and output PASS/FAIL per case.
 - [references/dataset-layout.md](references/dataset-layout.md)
   Define the fixture directory layout, naming rules, and media properties.
 - [references/checklist-design.md](references/checklist-design.md)
@@ -133,3 +153,4 @@ The JSON report stores the same request payload and full model output in machine
 - "Use $vllm-multimodal-evaluator to verify whether this service supports JPG, PNG, WebP, BMP, and TIFF through file URL and Base64."
 - "Use $vllm-multimodal-evaluator to test multi-image ordering, interleaved text plus image messages, and video sequence understanding."
 - "Use $vllm-multimodal-evaluator to rerun the checklist and summarize which failures are transport issues versus real model understanding gaps."
+- "Use $vllm-multimodal-evaluator to run the Function Calling test suite against a service with `--enable-auto-tool-choice --tool-call-parser qwen3_xml`."

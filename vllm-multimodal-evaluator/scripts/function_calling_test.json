@@ -1,0 +1,222 @@
+{
+  "test_suite_name": "Function Calling 功能/精度/鲁棒性 标准测试集",
+  "test_version": "1.0",
+  "functions": [
+    {
+      "name": "get_weather",
+      "description": "获取指定城市的天气信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string", "description": "城市名称" },
+          "date": { "type": "string", "description": "日期，如 2025-01-01" }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "数学表达式计算",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expression": { "type": "string", "description": "数学表达式" }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "get_server_status",
+      "description": "查询服务器运行状态",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": { "type": "string", "description": "机器编号，如 T4" }
+        },
+        "required": ["machine"]
+      }
+    },
+    {
+      "name": "send_notice",
+      "description": "发送通知消息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user": { "type": "string", "description": "接收用户" },
+          "content": { "type": "string", "description": "通知内容" }
+        },
+        "required": ["user", "content"]
+      }
+    },
+    {
+      "name": "search_document",
+      "description": "文档关键词检索",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "keyword": { "type": "string", "description": "检索关键词" }
+        },
+        "required": ["keyword"]
+      }
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "FC-001",
+      "scene": "基础功能",
+      "input": "帮我查一下北京今天的天气",
+      "expected": {
+        "function": "get_weather",
+        "parameters": { "city": "北京", "date": "今天" },
+        "action": "call_function"
+      }
+    },
+    {
+      "id": "FC-002",
+      "scene": "基础功能",
+      "input": "查一下上海天气",
+      "expected": {
+        "function": "get_weather",
+        "parameters": { "city": "上海" },
+        "action": "call_function"
+      }
+    },
+    {
+      "id": "FC-003",
+      "scene": "基础功能",
+      "input": "计算 128 * 36 + 742",
+      "expected": {
+        "function": "calculate",
+        "parameters": { "expression": "128 * 36 + 742" },
+        "action": "call_function"
+      }
+    },
+    {
+      "id": "FC-004",
+      "scene": "基础功能",
+      "input": "查看 T4 机器的运行状态",
+      "expected": {
+        "function": "get_server_status",
+        "parameters": { "machine": "T4" },
+        "action": "call_function"
+      }
+    },
+    {
+      "id": "FC-005",
+      "scene": "多工具并行",
+      "input": "帮我查广州明天的天气，再计算 99+199",
+      "expected": {
+        "functions": ["get_weather", "calculate"],
+        "parameters": {
+          "get_weather": { "city": "广州", "date": "明天" },
+          "calculate": { "expression": "99+199" }
+        },
+        "action": "parallel_call"
+      }
+    },
+    {
+      "id": "FC-006",
+      "scene": "多工具并行",
+      "input": "我想知道下周一天气，顺便算一下 360/12",
+      "expected": {
+        "functions": ["get_weather", "calculate"],
+        "parameters": {
+          "get_weather": { "date": "下周一" },
+          "calculate": { "expression": "360/12" }
+        },
+        "action": "parallel_call"
+      }
+    },
+    {
+      "id": "FC-007",
+      "scene": "参数缺失",
+      "input": "查一下天气",
+      "expected": {
+        "action": "ask_user",
+        "message": "请提供需要查询天气的城市名称"
+      }
+    },
+    {
+      "id": "FC-008",
+      "scene": "参数缺失",
+      "input": "帮我查服务器状态",
+      "expected": {
+        "action": "ask_user",
+        "message": "请提供需要查询的机器编号"
+      }
+    },
+    {
+      "id": "FC-009",
+      "scene": "多轮对话",
+      "input": ["帮我查 T4 机器状态", "把刚才查到的状态发给管理员"],
+      "expected": {
+        "function": "send_notice",
+        "parameters": { "user": "管理员", "content": "{prev_result}" },
+        "action": "call_function"
+      }
+    },
+    {
+      "id": "FC-010",
+      "scene": "多轮对话",
+      "input": ["计算 32*5", "把这个结果发给管理员"],
+      "expected": {
+        "function": "send_notice",
+        "parameters": { "user": "管理员", "content": "160" },
+        "action": "call_function"
+      }
+    },
+    {
+      "id": "FC-011",
+      "scene": "无需调用",
+      "input": "什么是函数调用？",
+      "expected": {
+        "action": "direct_answer",
+        "call_function": false
+      }
+    },
+    {
+      "id": "FC-012",
+      "scene": "无需调用",
+      "input": "你好，今天过得怎么样",
+      "expected": {
+        "action": "direct_answer",
+        "call_function": false
+      }
+    },
+    {
+      "id": "FC-013",
+      "scene": "模糊参数",
+      "input": "查一下北京旁边那个城市的天气",
+      "expected": {
+        "action": "ask_user",
+        "message": "请提供具体的城市名称"
+      }
+    },
+    {
+      "id": "FC-014",
+      "scene": "非法参数",
+      "input": "查一下火星的天气",
+      "expected": {
+        "action": "direct_answer",
+        "call_function": false,
+        "message": "无法识别有效城市，不执行查询"
+      }
+    },
+    {
+      "id": "FC-015",
+      "scene": "长文本干扰",
+      "input": "这是一段无关测试文本，用于测试模型抗干扰能力。帮我算一下 88*76",
+      "expected": {
+        "function": "calculate",
+        "parameters": { "expression": "88*76" },
+        "action": "call_function"
+      }
+    }
+  ],
+  "eval_rules": {
+    "pass_condition": "函数名匹配 + 参数匹配 + 行为匹配",
+    "parallel_pass": "至少正确识别并调用全部目标函数",
+    "ask_pass": "模型主动追问缺失参数，不臆造、不跳过",
+    "no_call_pass": "不生成任何函数调用"
+  }
+}

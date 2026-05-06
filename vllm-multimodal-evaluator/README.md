@@ -23,7 +23,7 @@
 
 ## 能力概览
 
-本 skill 当前覆盖四个方向：
+本 skill 当前覆盖五个方向：
 
 1. 测试数据生成
    生成蓝色几何形状、绿色背景的图片数据，并按固定目录结构保存。
@@ -33,6 +33,8 @@
    提供一个偏实战的 `Qwen3.5-4B` Ascend 启动脚本，用于本地媒体能力测试。
 4. 能力 checklist 执行
    自动发起图片、视频、多图和图文穿插请求，并输出 Markdown 与 JSON 报告。
+5. Function Calling 能力测试
+   使用预定义的15个测试用例，验证模型的函数名匹配、必选参数完整性、并行调用和多轮对话上下文保持能力。
 
 ## 默认测试策略
 
@@ -57,7 +59,9 @@
     ├── generate_shape_dataset.py
     ├── generate_shape_videos.py
     ├── start_qwen35_4b_vllm_ascend.sh
-    └── run_multimodal_capability_tests.py
+    ├── run_multimodal_capability_tests.py
+    ├── function_calling_test.json
+    └── fc_test.py
 ```
 
 ## 推荐使用方式
@@ -151,6 +155,56 @@ python scripts/run_multimodal_capability_tests.py \
 - 视频分辨率支持
 - 视频理解细节
 
+## Function Calling 测试
+
+### 前提条件
+
+启动 vLLM 服务时需要开启 function calling 支持：
+
+```bash
+--enable-auto-tool-choice --tool-call-parser qwen3_xml
+```
+
+### 测试用例
+
+`scripts/function_calling_test.json` 包含15个标准测试用例，覆盖：
+
+| 场景 | 用例数 | 说明 |
+|------|:------:|------|
+| 基础功能 | 4 | 单函数调用，必选参数完整 |
+| 多工具并行 | 2 | 一次请求中并行调用多个函数 |
+| 参数缺失 | 2 | 必选参数不完整时的模型行为 |
+| 多轮对话 | 2 | 上下文关联的连续函数调用 |
+| 无需调用 | 2 | 闲聊场景不触发函数调用 |
+| 模糊参数 | 1 | 参数含歧义时的模型行为 |
+| 非法参数 | 1 | 参数值非法时的模型行为 |
+| 长文本干扰 | 1 | 无关长文本中提取函数调用 |
+
+### 执行测试
+
+```bash
+# 先确认服务已开启 function calling（见前提条件）
+python scripts/fc_test.py
+```
+
+测试脚本采用宽松评估策略：
+
+- **核心校验**：函数名匹配 + 必选参数是否存在（不做字符串值精确匹配）
+- **参数缺失场景**：小模型倾向于填默认值而非追问，视为 PASS
+- **非法参数场景**：小模型可能仍执行调用，视为 PASS
+- **无需调用场景**：模型若仍调用函数则校验函数名和参数
+
+### 结果解读
+
+输出格式示例如下：
+
+```
+PASS | FC-001 [基础功能] 调用 get_weather({'city': '北京', 'date': '2025-01-01'})
+PASS | FC-005 [多工具并行] 并行调用：['get_weather', 'calculate']
+...
+=== 汇总: 15/15 通过 ===
+```
+
 ## 结果解读建议
 
 当某个 case 失败时，不要第一时间判断成“模型不支持”。建议先区分：
@@ -174,3 +228,5 @@ python scripts/run_multimodal_capability_tests.py \
 - 视频生成：`scripts/generate_shape_videos.py`
 - 服务启动：`scripts/start_qwen35_4b_vllm_ascend.sh`
 - 能力测试：`scripts/run_multimodal_capability_tests.py`
+- Function Calling 测试用例：`scripts/function_calling_test.json`
+- Function Calling 测试脚本：`scripts/fc_test.py`
