@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 import urllib.error
@@ -170,7 +171,10 @@ def run_case(base_url: str, model: str, case: dict, max_completion_tokens: int) 
         finish_reason = data.get("choices", [{}])[0].get("finish_reason")
         rec["content"] = content
         rec["finish_reason"] = finish_reason
-        rec["pass"] = content.strip().lower() == case["expected"]
+        # Normalize: strip, lowercase, then remove spaces around commas
+        # so "circle, cube, cylinder" matches "circle,cube,cylinder"
+        _norm = lambda s: re.sub(r"\s*,\s*", ",", s.strip().lower())
+        rec["pass"] = _norm(content) == _norm(case["expected"])
     except urllib.error.HTTPError as exc:
         rec["returncode"] = exc.code
         rec["stderr"] = exc.read().decode("utf-8", errors="replace")
