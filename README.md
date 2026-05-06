@@ -9,7 +9,7 @@
 - `vllm-ascend-api-server-profiler`
   面向 stock `vllm-ascend` OpenAI API server 的热点分析工作流，强调外置 monkey patch、请求级 profile、stage-based breakdown，以及基于热点函数内部逻辑的多方案调优分析。
 - `vllm-multimodal-evaluator`
-  面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖本地图片和视频测试数据生成、Qwen3.5-4B 本地媒体部署，以及图片格式、Base64、多图、图文穿插、视频格式和视频时序理解 checklist。
+  面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖本地图片和视频测试数据生成、Qwen3.5-4B 本地媒体部署，以及两阶段测试（格式读取 + 语义理解），支持 `file://` / Base64 / HTTP 三种传输模式。报告头部包含服务配置表（dtype、chunked prefill、async scheduling、prefix caching、function calling）。
 - `vllm-multimodal-precision-testing`
   面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0` 固定图片和视频冒烟测试、`L0.5` 的 `1~40` 张图多图精度测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试；现在统一支持 `base64`、`local_path` 和本地 `http` 三种输入方式，适合在模型调优或部署变更后做快速、可重复的多模态精度检查。
 

@@ -15,6 +15,17 @@ from typing import Any
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_MODEL = "/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B"
 
+# Service feature flags — set via CLI, shown in report header
+ServiceConfig = {
+    "chunked_prefill": True,
+    "async_scheduling": True,
+    "prefix_caching": True,
+    "function_calling": True,
+    "dtype": "bfloat16",
+    "gpu_memory_utilization": 0.7,
+    "enforce_eager": True,
+}
+
 SHAPE_ORDER = [
     "square",
     "rectangle",
@@ -86,18 +97,34 @@ def file_url(path: Path) -> str:
     return path.resolve().as_uri()
 
 
+def http_url(path: Path, base_url: str, project_root: Path) -> str:
+    """Build an HTTP URL for a local file relative to project_root."""
+    relative = path.resolve().relative_to(project_root.resolve())
+    return f"{base_url.rstrip('/')}/{relative.as_posix()}"
+
+
 def data_url(path: Path, media_type: str) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime_type_for(path, media_type)};base64,{encoded}"
 
 
-def image_content_url(path: Path, mode: str) -> dict[str, Any]:
-    url = file_url(path) if mode == "file_url" else data_url(path, "image")
+def image_content_url(path: Path, mode: str, base_url: str = "", project_root: Path | None = None) -> dict[str, Any]:
+    if mode == "file_url":
+        url = file_url(path)
+    elif mode == "http":
+        url = http_url(path, base_url, project_root or Path.cwd())
+    else:
+        url = data_url(path, "image")
     return {"type": "image_url", "image_url": {"url": url}}
 
 
-def video_content_url(path: Path, mode: str = "file_url") -> dict[str, Any]:
-    url = file_url(path) if mode == "file_url" else data_url(path, "video")
+def video_content_url(path: Path, mode: str = "file_url", base_url: str = "", project_root: Path | None = None) -> dict[str, Any]:
+    if mode == "file_url":
+        url = file_url(path)
+    elif mode == "http":
+        url = http_url(path, base_url, project_root or Path.cwd())
+    else:
+        url = data_url(path, "video")
     return {"type": "video_url", "video_url": {"url": url}}
 
 
@@ -113,7 +140,7 @@ def ordered_shape_expected_groups() -> list[list[str]]:
     return [SHAPE_SYNONYMS[shape] for shape in SHAPE_ORDER]
 
 
-def build_cases(project_root: Path) -> list[TestCase]:
+def build_cases(project_root: Path, media_base_url: str | None = None) -> list[TestCase]:
     cases: list[TestCase] = []
     pics = project_root / "pics"
     videos = project_root / "video"
@@ -333,6 +360,337 @@ def build_cases(project_root: Path) -> list[TestCase]:
         )
     )
 
+    # ── HTTP mode semantic variants ──
+    if media_base_url:
+        prompt_describe = "请描述这张图片中的图形、图形颜色和背景颜色。请简短回答。"
+        multi_prompt = "请按图片输入顺序列出每张图中的形状名称。只输出英文逗号分隔列表，不要解释，不要编号，不要分析。"
+        video_prompt = "请按出现顺序列出视频中的所有形状。只输出英文逗号分隔列表，不要解释，不要编号，不要分析。"
+
+        # Single image format — HTTP (5 formats)
+        for extension in ["jpg", "png", "webp", "bmp", "tiff"]:
+            path = pics / "720x1280" / extension / f"rectangle.{extension}"
+            cases.append(
+                TestCase(
+                    case_id=f"IMG-HTTP-{extension.upper()}",
+                    category="图片单图格式支持：HTTP",
+                    media_type="image",
+                    input_mode="http",
+                    prompt=prompt_describe,
+                    content=[text_content(prompt_describe), image_content_url(path, "http", media_base_url, project_root)],
+                    expected_groups=shape_expected_groups("rectangle"),
+                    files=[path],
+                    resolution="720x1280",
+                    media_format=extension,
+                )
+            )
+
+        # Resolution — HTTP (3 resolutions)
+        for resolution in ["256x512", "720x1280", "1920x1080"]:
+            path = pics / resolution / "jpg" / "circle.jpg"
+            cases.append(
+                TestCase(
+                    case_id=f"IMG-RES-HTTP-{resolution}",
+                    category="图片分辨率支持：HTTP",
+                    media_type="image",
+                    input_mode="http",
+                    prompt=prompt_describe,
+                    content=[text_content(prompt_describe), image_content_url(path, "http", media_base_url, project_root)],
+                    expected_groups=shape_expected_groups("circle"),
+                    files=[path],
+                    resolution=resolution,
+                    media_format="jpg",
+                )
+            )
+
+        # Multi-image — HTTP (7 images)
+        multi_paths = [pics / "720x1280" / "jpg" / f"{shape}.jpg" for shape in SHAPE_ORDER]
+        cases.append(
+            TestCase(
+                case_id="IMG-MULTI-7-HTTP",
+                category="多图输入理解：HTTP",
+                media_type="image",
+                input_mode="http",
+                prompt=multi_prompt,
+                content=[text_content(multi_prompt), *[image_content_url(path, "http", media_base_url, project_root) for path in multi_paths]],
+                expected_groups=ordered_shape_expected_groups(),
+                files=multi_paths,
+                resolution="720x1280",
+                media_format="jpg",
+                max_completion_tokens=512,
+            )
+        )
+
+        # Video format — HTTP (4 formats)
+        for extension in ["mp4", "avi", "mov", "mkv"]:
+            path = videos / "720x1280" / extension / f"shapes.{extension}"
+            cases.append(
+                TestCase(
+                    case_id=f"VID-HTTP-{extension.upper()}",
+                    category="视频格式支持：HTTP",
+                    media_type="video",
+                    input_mode="http",
+                    prompt=video_prompt,
+                    content=[text_content(video_prompt), video_content_url(path, "http", media_base_url, project_root)],
+                    expected_groups=ordered_shape_expected_groups(),
+                    files=[path],
+                    resolution="720x1280",
+                    media_format=extension,
+                    max_completion_tokens=512,
+                )
+            )
+
+        # Video resolution — HTTP (2 resolutions)
+        for resolution in ["720x1280", "1080x1920"]:
+            path = videos / resolution / "mp4" / "shapes.mp4"
+            cases.append(
+                TestCase(
+                    case_id=f"VID-RES-HTTP-{resolution}",
+                    category="视频分辨率支持：HTTP",
+                    media_type="video",
+                    input_mode="http",
+                    prompt=video_prompt,
+                    content=[text_content(video_prompt), video_content_url(path, "http", media_base_url, project_root)],
+                    expected_groups=ordered_shape_expected_groups(),
+                    files=[path],
+                    resolution=resolution,
+                    media_format="mp4",
+                    max_completion_tokens=512,
+                )
+            )
+
+        # Video details — HTTP (first, last, order)
+        mp4_video = videos / "720x1280" / "mp4" / "shapes.mp4"
+        cases.append(
+            TestCase(
+                case_id="VID-FIRST-HTTP",
+                category="视频理解细节：HTTP",
+                media_type="video",
+                input_mode="http",
+                prompt="视频中第一个出现的形状是什么？只回答形状名称。",
+                content=[text_content("视频中第一个出现的形状是什么？只回答形状名称。"), video_content_url(mp4_video, "http", media_base_url, project_root)],
+                expected_groups=[SHAPE_SYNONYMS["square"]],
+                files=[mp4_video],
+                resolution="720x1280",
+                media_format="mp4",
+            )
+        )
+        cases.append(
+            TestCase(
+                case_id="VID-LAST-HTTP",
+                category="视频理解细节：HTTP",
+                media_type="video",
+                input_mode="http",
+                prompt="视频中最后一个出现的形状是什么？只回答形状名称。",
+                content=[text_content("视频中最后一个出现的形状是什么？只回答形状名称。"), video_content_url(mp4_video, "http", media_base_url, project_root)],
+                expected_groups=[SHAPE_SYNONYMS["cube"]],
+                files=[mp4_video],
+                resolution="720x1280",
+                media_format="mp4",
+            )
+        )
+        cases.append(
+            TestCase(
+                case_id="VID-ORDER-HTTP",
+                category="视频理解细节：HTTP",
+                media_type="video",
+                input_mode="http",
+                prompt=video_prompt,
+                content=[text_content(video_prompt), video_content_url(mp4_video, "http", media_base_url, project_root)],
+                expected_groups=ordered_shape_expected_groups(),
+                files=[mp4_video],
+                resolution="720x1280",
+                media_format="mp4",
+                max_completion_tokens=512,
+            )
+        )
+
+    return cases
+
+
+def build_ingestion_cases(project_root: Path, media_base_url: str | None = None) -> list[TestCase]:
+    """Build ingestion-only test cases — check if service can read the file format.
+    
+    Unlike build_cases(), these cases only verify that the service can ingest
+    the media file (HTTP 200 + no error). No semantic understanding check.
+    """
+    cases: list[TestCase] = []
+    pics = project_root / "pics"
+    videos = project_root / "video"
+
+    # Minimal prompt — just enough to trigger media ingestion
+    ingest_prompt = "describe"
+    ingest_max_tokens = 16
+
+    # Image format ingestion: file_url mode (5 formats × 1 resolution)
+    for extension in ["jpg", "png", "webp", "bmp", "tiff"]:
+        path = pics / "720x1280" / extension / f"rectangle.{extension}"
+        if not path.exists():
+            path = pics / "720x1280" / extension / f"triangle.{extension}"
+        cases.append(
+            TestCase(
+                case_id=f"INGEST-IMG-FILE-{extension.upper()}",
+                category="图片格式读取",
+                media_type="image",
+                input_mode="file_url",
+                prompt=ingest_prompt,
+                content=[text_content(ingest_prompt), image_content_url(path, "file_url")],
+                files=[path],
+                resolution="720x1280",
+                media_format=extension,
+                max_completion_tokens=ingest_max_tokens,
+            )
+        )
+
+    # Image format ingestion: base64 mode (5 formats)
+    for extension in ["jpg", "png", "webp", "bmp", "tiff"]:
+        path = pics / "720x1280" / extension / f"triangle.{extension}"
+        if not path.exists():
+            path = pics / "720x1280" / extension / f"rectangle.{extension}"
+        cases.append(
+            TestCase(
+                case_id=f"INGEST-IMG-B64-{extension.upper()}",
+                category="图片格式读取",
+                media_type="image",
+                input_mode="base64",
+                prompt=ingest_prompt,
+                content=[text_content(ingest_prompt), image_content_url(path, "base64")],
+                files=[path],
+                resolution="720x1280",
+                media_format=extension,
+                max_completion_tokens=ingest_max_tokens,
+            )
+        )
+
+    # Image resolution ingestion (3 resolutions × file_url)
+    for resolution in ["256x512", "720x1280", "1920x1080"]:
+        path = pics / resolution / "jpg" / "circle.jpg"
+        cases.append(
+            TestCase(
+                case_id=f"INGEST-IMG-RES-{resolution}",
+                category="图片格式读取",
+                media_type="image",
+                input_mode="file_url",
+                prompt=ingest_prompt,
+                content=[text_content(ingest_prompt), image_content_url(path, "file_url")],
+                files=[path],
+                resolution=resolution,
+                media_format="jpg",
+                max_completion_tokens=ingest_max_tokens,
+            )
+        )
+
+    # Video format ingestion (4 formats × file_url)
+    for extension in ["mp4", "avi", "mov", "mkv"]:
+        path = videos / "720x1280" / extension / f"shapes.{extension}"
+        cases.append(
+            TestCase(
+                case_id=f"INGEST-VID-FILE-{extension.upper()}",
+                category="视频格式读取",
+                media_type="video",
+                input_mode="file_url",
+                prompt=ingest_prompt,
+                content=[text_content(ingest_prompt), video_content_url(path)],
+                files=[path],
+                resolution="720x1280",
+                media_format=extension,
+                max_completion_tokens=ingest_max_tokens,
+            )
+        )
+
+    # Video resolution ingestion (2 resolutions × mp4)
+    for resolution in ["720x1280", "1080x1920"]:
+        path = videos / resolution / "mp4" / "shapes.mp4"
+        cases.append(
+            TestCase(
+                case_id=f"INGEST-VID-RES-{resolution}",
+                category="视频格式读取",
+                media_type="video",
+                input_mode="file_url",
+                prompt=ingest_prompt,
+                content=[text_content(ingest_prompt), video_content_url(path)],
+                files=[path],
+                resolution=resolution,
+                media_format="mp4",
+                max_completion_tokens=ingest_max_tokens,
+            )
+        )
+
+    # ── HTTP mode ingestion variants ──
+    if media_base_url:
+        # Image format ingestion: http mode (5 formats × 1 resolution)
+        for extension in ["jpg", "png", "webp", "bmp", "tiff"]:
+            path = pics / "720x1280" / extension / f"rectangle.{extension}"
+            if not path.exists():
+                path = pics / "720x1280" / extension / f"triangle.{extension}"
+            cases.append(
+                TestCase(
+                    case_id=f"INGEST-IMG-HTTP-{extension.upper()}",
+                    category="图片格式读取",
+                    media_type="image",
+                    input_mode="http",
+                    prompt=ingest_prompt,
+                    content=[text_content(ingest_prompt), image_content_url(path, "http", media_base_url, project_root)],
+                    files=[path],
+                    resolution="720x1280",
+                    media_format=extension,
+                    max_completion_tokens=ingest_max_tokens,
+                )
+            )
+
+        # Image resolution ingestion: http mode (3 resolutions)
+        for resolution in ["256x512", "720x1280", "1920x1080"]:
+            path = pics / resolution / "jpg" / "circle.jpg"
+            cases.append(
+                TestCase(
+                    case_id=f"INGEST-IMG-RES-HTTP-{resolution}",
+                    category="图片格式读取",
+                    media_type="image",
+                    input_mode="http",
+                    prompt=ingest_prompt,
+                    content=[text_content(ingest_prompt), image_content_url(path, "http", media_base_url, project_root)],
+                    files=[path],
+                    resolution=resolution,
+                    media_format="jpg",
+                    max_completion_tokens=ingest_max_tokens,
+                )
+            )
+
+        # Video format ingestion: http mode (4 formats)
+        for extension in ["mp4", "avi", "mov", "mkv"]:
+            path = videos / "720x1280" / extension / f"shapes.{extension}"
+            cases.append(
+                TestCase(
+                    case_id=f"INGEST-VID-HTTP-{extension.upper()}",
+                    category="视频格式读取",
+                    media_type="video",
+                    input_mode="http",
+                    prompt=ingest_prompt,
+                    content=[text_content(ingest_prompt), video_content_url(path, "http", media_base_url, project_root)],
+                    files=[path],
+                    resolution="720x1280",
+                    media_format=extension,
+                    max_completion_tokens=ingest_max_tokens,
+                )
+            )
+
+        # Video resolution ingestion: http mode (2 resolutions)
+        for resolution in ["720x1280", "1080x1920"]:
+            path = videos / resolution / "mp4" / "shapes.mp4"
+            cases.append(
+                TestCase(
+                    case_id=f"INGEST-VID-RES-HTTP-{resolution}",
+                    category="视频格式读取",
+                    media_type="video",
+                    input_mode="http",
+                    prompt=ingest_prompt,
+                    content=[text_content(ingest_prompt), video_content_url(path, "http", media_base_url, project_root)],
+                    files=[path],
+                    resolution=resolution,
+                    media_format="mp4",
+                    max_completion_tokens=ingest_max_tokens,
+                )
+            )
+
     return cases
 
 
@@ -444,6 +802,64 @@ def run_case(case: TestCase, base_url: str, model: str, timeout: float, default_
         "latency_seconds": round(latency, 3),
         "model_output": output,
         "error": error,
+        "test_type": "semantic",
+    }
+
+
+def run_ingestion_case(case: TestCase, base_url: str, model: str, timeout: float, default_max_tokens: int) -> dict[str, Any]:
+    """Run an ingestion-only check — verify the service can ingest the media file.
+    
+    PASS criteria: HTTP 200 + no 'error' key in response JSON + non-empty output.
+    FAIL: HTTP error or error field in response.
+    """
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": case.content}],
+        "temperature": 0,
+        "max_completion_tokens": case.max_completion_tokens or default_max_tokens,
+        "stream": False,
+    }
+    start = time.perf_counter()
+    http_status, response_json, raw_body = post_json(url, payload, timeout)
+    latency = time.perf_counter() - start
+    output = extract_model_output(response_json)
+
+    # Ingestion PASS: HTTP 200 + no error field + non-empty output
+    if http_status == 200 and response_json and "error" not in response_json and output.strip():
+        status = "PASS"
+        error = ""
+    elif http_status == 0 or http_status >= 400:
+        status = "BLOCKED"
+        error = raw_body
+    else:
+        status = "FAIL"
+        error_msg = ""
+        if response_json and "error" in response_json:
+            error_msg = response_json["error"].get("message", str(response_json["error"]))
+        elif not output.strip():
+            error_msg = "empty model output (possible ingestion failure)"
+        error = error_msg or raw_body
+
+    return {
+        "case_id": case.case_id,
+        "category": case.category,
+        "media_type": case.media_type,
+        "input_mode": case.input_mode,
+        "resolution": case.resolution,
+        "format": case.media_format,
+        "files": [str(path.relative_to(Path.cwd())) for path in case.files],
+        "prompt": case.prompt,
+        "request_payload": payload,
+        "max_completion_tokens": payload["max_completion_tokens"],
+        "expected_groups": case.expected_groups,
+        "group_matches": [],
+        "http_status": http_status,
+        "status": status,
+        "latency_seconds": round(latency, 3),
+        "model_output": output,
+        "error": error,
+        "test_type": "ingestion",
     }
 
 
@@ -466,21 +882,109 @@ def fenced_text(value: str) -> str:
 
 
 def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) -> str:
+    service_config = preflight.get("service_config", {})
+
+    # Build service config table
+    config_items = [
+        ("dtype", str(service_config.get("dtype", "未知"))),
+        ("enforce-eager", "开启"),
+        ("chunked-prefill", "开启" if service_config.get("chunked_prefill", False) else "关闭"),
+        ("async-scheduling", "开启" if service_config.get("async_scheduling", False) else "关闭"),
+        ("prefix-caching", "开启" if service_config.get("prefix_caching", False) else "关闭"),
+        ("function calling", "开启" if service_config.get("function_calling", False) else "关闭"),
+    ]
+    if service_config.get("gpu_memory_utilization"):
+        config_items.append(("gpu-memory-utilization", str(service_config["gpu_memory_utilization"])))
+    if service_config.get("media_base_url"):
+        config_items.append(("media-base-url", str(service_config["media_base_url"])))
+
     lines = [
         "# Qwen3.5-4B 多模态能力测试 Checklist",
         "",
-        "## 0. 服务状态",
+        "## 0. 服务配置",
         "",
-        f"- [{'x' if preflight.get('models_ok') else ' '}] `/v1/models` 可访问",
-        f"- [{'x' if preflight.get('model_available') else ' '}] 模型名称可用于请求",
-        f"- [{'x' if preflight.get('local_media_present') else ' '}] 本地测试媒体目录存在",
-        "",
+        "| 配置项 | 值 |",
+        "|---|---:|",
     ]
+    for key, value in config_items:
+        lines.append(f"| {key} | {value} |")
+    lines.append("")
+    lines.append("### 服务状态")
+    lines.append("")
+    lines.append(f"- [{'x' if preflight.get('models_ok') else ' '}] `/v1/models` 可访问")
+    lines.append(f"- [{'x' if preflight.get('model_available') else ' '}] 模型名称可用于请求")
+    lines.append(f"- [{'x' if preflight.get('local_media_present') else ' '}] 本地测试媒体目录存在")
+    lines.append("")
+
+    # Split results into ingestion and semantic
+    ingestion_results = [r for r in results if r.get("test_type") == "ingestion"]
+    semantic_results = [r for r in results if r.get("test_type") != "ingestion"]
+
+    # ── Ingestion results section ──
+    if ingestion_results:
+        ingest_categories = []
+        for result in ingestion_results:
+            if result["category"] not in ingest_categories:
+                ingest_categories.append(result["category"])
+
+        lines.extend(["---", "", "## 1. 媒体格式读取测试", "",
+                       "检查服务能否正常读取并处理各格式的媒体文件。只要 HTTP 200 + 无错误即 PASS，不校验语义理解。",
+                       ""])
+
+        for cat in ingest_categories:
+            cat_results = [r for r in ingestion_results if r["category"] == cat]
+            lines.extend([
+                f"### {cat}",
+                "",
+                "| Case | 文件 | 输入方式 | HTTP | 耗时(s) | 结果 | 说明 |",
+                "|---|---|---:|---:|---:|---:|---|",
+            ])
+            for r in cat_results:
+                files = "<br>".join(r["files"])
+                remark = r["error"][:120] if r["error"] else r["model_output"][:80]
+                lines.append(
+                    "| " + " | ".join([
+                        escape_cell(r["case_id"]),
+                        escape_cell(files),
+                        escape_cell(r.get("input_mode", "")),
+                        escape_cell(r["http_status"]),
+                        escape_cell(r["latency_seconds"]),
+                        escape_cell(r["status"]),
+                        escape_cell(remark),
+                    ]) + " |"
+                )
+            lines.append("")
+
+        # Ingestion summary matrix
+        ingest_summary: dict[str, dict[str, int]] = {}
+        for r in ingestion_results:
+            ingest_summary.setdefault(r["category"], {"PASS": 0, "FAIL": 0, "BLOCKED": 0})
+            ingest_summary[r["category"]][r["status"]] = ingest_summary[r["category"]].get(r["status"], 0) + 1
+
+        lines.extend([
+            "### 格式读取汇总",
+            "",
+            "| 能力项 | PASS | FAIL | BLOCKED |",
+            "|---|---:|---:|---:|",
+        ])
+        for cat, counts in ingest_summary.items():
+            lines.append(
+                f"| {escape_cell(cat)} | {counts.get('PASS', 0)} | {counts.get('FAIL', 0)} | {counts.get('BLOCKED', 0)} |"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── Semantic results section ──
 
     categories = []
-    for result in results:
+    for result in semantic_results:
         if result["category"] not in categories:
             categories.append(result["category"])
+
+    if categories:
+        lines.append("## 2. 语义理解测试")
+        lines.append("")
 
     for category in categories:
         lines.extend(
@@ -491,7 +995,7 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) ->
                 "|---|---|---:|---|---:|---|---:|---|",
             ]
         )
-        for result in [item for item in results if item["category"] == category]:
+        for result in [item for item in semantic_results if item["category"] == category]:
             files = "<br>".join(result["files"])
             expected = "<br>".join("/".join(group[:3]) for group in result["expected_groups"])
             remark = result["model_output"][:160] if result["status"] != "BLOCKED" else result["error"][:160]
@@ -514,13 +1018,13 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) ->
         lines.append("")
 
     summary: dict[str, dict[str, int]] = {}
-    for result in results:
+    for result in semantic_results:
         summary.setdefault(result["category"], {"PASS": 0, "FAIL": 0, "BLOCKED": 0, "SKIP": 0})
         summary[result["category"]][result["status"]] = summary[result["category"]].get(result["status"], 0) + 1
 
     lines.extend(
         [
-            "## 汇总矩阵",
+            "## 3. 语义理解汇总",
             "",
             "| 能力项 | PASS | FAIL | BLOCKED | SKIP |",
             "|---|---:|---:|---:|---:|",
@@ -532,7 +1036,7 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any]) ->
             f"{counts.get('BLOCKED', 0)} | {counts.get('SKIP', 0)} |"
         )
 
-    failures = [result for result in results if result["status"] in {"FAIL", "BLOCKED"}]
+    failures = [result for result in semantic_results if result["status"] in {"FAIL", "BLOCKED"}]
     lines.extend(
         [
             "",
@@ -595,12 +1099,25 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--results-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    # Service config flags (for report header)
+    parser.add_argument("--dtype", default=ServiceConfig["dtype"], help="Model precision (bfloat16/float16/float32)")
+    parser.add_argument("--chunked-prefill", default=ServiceConfig["chunked_prefill"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
+    parser.add_argument("--async-scheduling", default=ServiceConfig["async_scheduling"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
+    parser.add_argument("--prefix-caching", default=ServiceConfig["prefix_caching"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
+    parser.add_argument("--function-calling", default=ServiceConfig["function_calling"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=ServiceConfig["gpu_memory_utilization"])
+    parser.add_argument("--enforce-eager", default=ServiceConfig["enforce_eager"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
+    parser.add_argument("--media-base-url", default=None, help="Base URL for HTTP mode media access, e.g. http://127.0.0.1:9000")
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
     results_dir = args.results_dir.resolve() if args.results_dir else (project_root / "results")
-    cases = build_cases(project_root)
-    missing_issues = assert_case_files(cases)
+
+    # Build ingestion cases + semantic cases
+    ingestion_cases = build_ingestion_cases(project_root, args.media_base_url)
+    semantic_cases = build_cases(project_root, args.media_base_url)
+    all_cases = ingestion_cases + semantic_cases
+    missing_issues = assert_case_files(all_cases)
     if missing_issues:
         raise FileNotFoundError(json.dumps(missing_issues, ensure_ascii=False, indent=2))
 
@@ -621,6 +1138,16 @@ def main() -> None:
         "model_available": model_available,
         "models_response": models_json if models_json is not None else models_raw,
         "local_media_present": (project_root / "pics").exists() and (project_root / "video").exists(),
+        "service_config": {
+            "dtype": args.dtype,
+            "chunked_prefill": args.chunked_prefill,
+            "async_scheduling": args.async_scheduling,
+            "prefix_caching": args.prefix_caching,
+            "function_calling": args.function_calling,
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "enforce_eager": args.enforce_eager,
+            "media_base_url": args.media_base_url or "N/A (file_url + base64 only)",
+        },
     }
 
     if args.dry_run:
@@ -649,8 +1176,9 @@ def main() -> None:
                 "latency_seconds": None,
                 "model_output": "",
                 "error": "dry-run",
+                "test_type": "ingestion" if case.case_id.startswith("INGEST-") else "semantic",
             }
-            for case in cases
+            for case in all_cases
         ]
     elif models_status != 200:
         results = [
@@ -678,11 +1206,16 @@ def main() -> None:
                 "latency_seconds": None,
                 "model_output": "",
                 "error": f"/v1/models unavailable: {models_raw}",
+                "test_type": "ingestion" if case.case_id.startswith("INGEST-") else "semantic",
             }
-            for case in cases
+            for case in all_cases
         ]
     else:
-        results = [run_case(case, args.base_url, args.model, args.timeout, args.max_tokens) for case in cases]
+        # Phase 1: ingestion checks
+        ingestion_results = [run_ingestion_case(c, args.base_url, args.model, args.timeout, args.max_tokens) for c in ingestion_cases]
+        # Phase 2: semantic understanding checks
+        semantic_results = [run_case(c, args.base_url, args.model, args.timeout, args.max_tokens) for c in semantic_cases]
+        results = ingestion_results + semantic_results
 
     report = {
         "preflight": preflight,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Function Calling test runner for vLLM - relaxed evaluation."""
-import json, sys, os, requests
+import argparse, json, os, requests
 
 ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
 MODEL = "/root/gpufree-data/models/Qwen3-5-2B"
@@ -9,24 +9,38 @@ def load_json(path):
     with open(path) as f:
         return json.load(f)
 
-def send(messages, tools):
+def send(messages, tools, endpoint, model):
     tools_openai = [{"type": "function", "function": t} for t in tools] if tools else []
     payload = {
-        "model": MODEL,
+        "model": model,
         "messages": messages,
         "tools": tools_openai,
         "tool_choice": "auto" if tools else "none",
         "temperature": 0.0,
         "max_completion_tokens": 512,
     }
-    resp = requests.post(ENDPOINT, json=payload, timeout=60)
+    resp = requests.post(endpoint, json=payload, timeout=60)
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
     return resp.json()
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else         "/root/gpufree-data/codes/vllm-ascend-skill/vllm-multimodal-evaluator/scripts/function_calling_test.json"
-    data = load_json(path)
+    parser = argparse.ArgumentParser(description="Run Function Calling test suite.")
+    parser.add_argument("--endpoint", default=ENDPOINT, help="OpenAI-compatible chat completions URL")
+    parser.add_argument("--model", default=MODEL, help="Model name")
+    parser.add_argument("--test-file", default="",
+                        help="Path to function_calling_test.json (default: auto-detect)")
+    args = parser.parse_args()
+
+    endpoint = args.endpoint
+    model = args.model
+    test_file = args.test_file
+    if not test_file:
+        # Auto-detect relative to script location
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        test_file = os.path.join(script_dir, "function_calling_test.json")
+
+    data = load_json(test_file)
     tools = data["functions"]
     cases = data["test_cases"]
 
@@ -38,7 +52,7 @@ def main():
 
         if isinstance(inp, list):
             messages = [{"role": "user", "content": inp[0]}]
-            r1 = send(messages, tools)
+            r1 = send(messages, tools, endpoint, model)
             am1 = r1["choices"][0]["message"]
             messages.append({"role": "assistant", "content": am1.get("content","")})
             if am1.get("tool_calls"):
@@ -46,10 +60,10 @@ def main():
                     messages.append({"role": "tool", "tool_call_id": tc["id"],
                                      "content": "result_placeholder"})
             messages.append({"role": "user", "content": inp[1]})
-            data_resp = send(messages, tools)
+            data_resp = send(messages, tools, endpoint, model)
         else:
             messages = [{"role": "user", "content": inp}]
-            data_resp = send(messages, tools)
+            data_resp = send(messages, tools, endpoint, model)
 
         choice = data_resp["choices"][0]
         msg = choice["message"]
@@ -89,8 +103,7 @@ def main():
 
     total = len(results)
     passed_count = sum(1 for _, _, p, _ in results if p)
-    print(f"
-=== 汇总: {passed_count}/{total} 通过 ===")
+    print(f"\n=== 汇总: {passed_count}/{total} 通过 ===")
 
 if __name__ == "__main__":
     main()
