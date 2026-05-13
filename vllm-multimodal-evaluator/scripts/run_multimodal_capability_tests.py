@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import functools
 import json
 import mimetypes
+import socket
+import socketserver
+import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass, field
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -742,6 +749,67 @@ def get_json(url: str, timeout: float) -> tuple[int, dict[str, Any] | None, str]
         return 0, None, repr(exc)
 
 
+def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return 200 <= response.status < 400
+    except Exception:
+        return False
+
+
+class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+@contextlib.contextmanager
+def maybe_start_media_server(
+    media_base_url: str | None,
+    project_root: Path,
+    auto_start: bool,
+) -> Any:
+    if not media_base_url or not auto_start:
+        yield
+        return
+
+    parsed = urllib.parse.urlparse(media_base_url)
+    host = parsed.hostname or ""
+    port = parsed.port or 80
+
+    # Only auto-manage a local plain HTTP media server.
+    if parsed.scheme != "http" or host not in {"127.0.0.1", "localhost"}:
+        yield
+        return
+
+    # If a server is already alive on this endpoint, reuse it.
+    if is_url_reachable(media_base_url, timeout=2.0):
+        yield
+        return
+
+    handler = functools.partial(QuietHTTPRequestHandler, directory=str(project_root))
+    httpd = ReusableThreadingHTTPServer((host, port), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def resolve_case_timeout(case: TestCase, base_timeout: float, video_timeout: float | None) -> float:
+    if case.media_type == "video" and not case.case_id.startswith("INGEST-"):
+        if video_timeout is not None:
+            return video_timeout
+        # Video semantic cases are much heavier than simple ingestion probes.
+        return max(base_timeout, 300.0)
+    return base_timeout
+
+
 def extract_model_output(response_json: dict[str, Any] | None) -> str:
     if not response_json:
         return ""
@@ -1099,6 +1167,17 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--results-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--video-timeout",
+        type=float,
+        default=None,
+        help="Per-request timeout for video semantic cases. Defaults to max(--timeout, 300).",
+    )
+    parser.add_argument(
+        "--auto-start-media-server",
+        action="store_true",
+        help="Auto-start a local static HTTP server for --media-base-url when it points to localhost/127.0.0.1.",
+    )
     # Service config flags (for report header)
     parser.add_argument("--dtype", default=ServiceConfig["dtype"], help="Model precision (bfloat16/float16/float32)")
     parser.add_argument("--chunked-prefill", default=ServiceConfig["chunked_prefill"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
@@ -1150,76 +1229,171 @@ def main() -> None:
         },
     }
 
-    if args.dry_run:
-        results = [
-            {
-                "case_id": case.case_id,
-                "category": case.category,
-                "media_type": case.media_type,
-                "input_mode": case.input_mode,
-                "resolution": case.resolution,
-                "format": case.media_format,
-                "files": [str(path.relative_to(project_root)) for path in case.files],
-                "prompt": case.prompt,
-                "request_payload": {
-                    "model": args.model,
-                    "messages": [{"role": "user", "content": case.content}],
-                    "temperature": 0,
+    def classify_failure(result: dict) -> tuple[str, bool, bool, str]:
+        status = result.get("status")
+        error_text = str(result.get("error") or "").lower()
+        case_id = str(result.get("case_id") or "")
+        test_type = result.get("test_type")
+        if status == "PASS":
+            return ("none", False, False, "Capability check passed.")
+        if status in {"BLOCKED", "SKIP"}:
+            return (
+                "pipeline_or_serving_issue",
+                False,
+                True,
+                "Service preflight blocked execution or the run was intentionally skipped.",
+            )
+        if status == "FAIL":
+            if test_type == "ingestion":
+                return (
+                    "pipeline_or_serving_issue",
+                    False,
+                    True,
+                    "Media ingestion failed; treat as transport, serving, or local media path issue first.",
+                )
+            if "timeout" in error_text or "http" in error_text or "connection" in error_text:
+                return (
+                    "pipeline_or_serving_issue",
+                    False,
+                    True,
+                    "Semantic request failed due to timeout or transport-level issue before a clean answer was obtained.",
+                )
+            return (
+                "model_capability_gap",
+                True,
+                False,
+                "Media was ingested but semantic expectations were not met; treat as a model capability gap candidate.",
+            )
+        if status in {"ERROR"}:
+            return (
+                "pipeline_or_serving_issue",
+                False,
+                True,
+                "Unexpected execution error while building or sending the request.",
+            )
+        return (
+            "unclassified",
+            False,
+            False,
+            "Need manual inspection.",
+        )
+
+    with maybe_start_media_server(args.media_base_url, project_root, args.auto_start_media_server):
+        if args.dry_run:
+            results = [
+                {
+                    "case_id": case.case_id,
+                    "category": case.category,
+                    "media_type": case.media_type,
+                    "input_mode": case.input_mode,
+                    "resolution": case.resolution,
+                    "format": case.media_format,
+                    "files": [str(path.relative_to(project_root)) for path in case.files],
+                    "prompt": case.prompt,
+                    "request_payload": {
+                        "model": args.model,
+                        "messages": [{"role": "user", "content": case.content}],
+                        "temperature": 0,
+                        "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
+                        "stream": False,
+                    },
                     "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
-                    "stream": False,
-                },
-                "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
-                "expected_groups": case.expected_groups,
-                "group_matches": [],
-                "http_status": None,
-                "status": "SKIP",
-                "latency_seconds": None,
-                "model_output": "",
-                "error": "dry-run",
-                "test_type": "ingestion" if case.case_id.startswith("INGEST-") else "semantic",
-            }
-            for case in all_cases
-        ]
-    elif models_status != 200:
-        results = [
-            {
-                "case_id": case.case_id,
-                "category": case.category,
-                "media_type": case.media_type,
-                "input_mode": case.input_mode,
-                "resolution": case.resolution,
-                "format": case.media_format,
-                "files": [str(path.relative_to(project_root)) for path in case.files],
-                "prompt": case.prompt,
-                "request_payload": {
-                    "model": args.model,
-                    "messages": [{"role": "user", "content": case.content}],
-                    "temperature": 0,
+                    "expected_groups": case.expected_groups,
+                    "group_matches": [],
+                    "http_status": None,
+                    "status": "SKIP",
+                    "latency_seconds": None,
+                    "model_output": "",
+                    "error": "dry-run",
+                    "test_type": "ingestion" if case.case_id.startswith("INGEST-") else "semantic",
+                }
+                for case in all_cases
+            ]
+        elif models_status != 200:
+            results = [
+                {
+                    "case_id": case.case_id,
+                    "category": case.category,
+                    "media_type": case.media_type,
+                    "input_mode": case.input_mode,
+                    "resolution": case.resolution,
+                    "format": case.media_format,
+                    "files": [str(path.relative_to(project_root)) for path in case.files],
+                    "prompt": case.prompt,
+                    "request_payload": {
+                        "model": args.model,
+                        "messages": [{"role": "user", "content": case.content}],
+                        "temperature": 0,
+                        "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
+                        "stream": False,
+                    },
                     "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
-                    "stream": False,
-                },
-                "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
-                "expected_groups": case.expected_groups,
-                "group_matches": [],
-                "http_status": models_status,
-                "status": "BLOCKED",
-                "latency_seconds": None,
-                "model_output": "",
-                "error": f"/v1/models unavailable: {models_raw}",
-                "test_type": "ingestion" if case.case_id.startswith("INGEST-") else "semantic",
-            }
-            for case in all_cases
-        ]
-    else:
-        # Phase 1: ingestion checks
-        ingestion_results = [run_ingestion_case(c, args.base_url, args.model, args.timeout, args.max_tokens) for c in ingestion_cases]
-        # Phase 2: semantic understanding checks
-        semantic_results = [run_case(c, args.base_url, args.model, args.timeout, args.max_tokens) for c in semantic_cases]
-        results = ingestion_results + semantic_results
+                    "expected_groups": case.expected_groups,
+                    "group_matches": [],
+                    "http_status": models_status,
+                    "status": "BLOCKED",
+                    "latency_seconds": None,
+                    "model_output": "",
+                    "error": f"/v1/models unavailable: {models_raw}",
+                    "test_type": "ingestion" if case.case_id.startswith("INGEST-") else "semantic",
+                }
+                for case in all_cases
+            ]
+        else:
+            ingestion_results = [
+                run_ingestion_case(c, args.base_url, args.model, resolve_case_timeout(c, args.timeout, args.video_timeout), args.max_tokens)
+                for c in ingestion_cases
+            ]
+            semantic_results = [
+                run_case(c, args.base_url, args.model, resolve_case_timeout(c, args.timeout, args.video_timeout), args.max_tokens)
+                for c in semantic_cases
+            ]
+            results = ingestion_results + semantic_results
 
     report = {
         "preflight": preflight,
         "results": results,
+    }
+    summary_counts: dict[str, int] = {}
+    test_type_counts: dict[str, int] = {}
+    engineering_errors: list[str] = []
+    model_limitations: list[str] = []
+    non_pass_cases: list[dict] = []
+    for result in results:
+        summary_counts[result["status"]] = summary_counts.get(result["status"], 0) + 1
+        test_type = str(result.get("test_type") or "unknown")
+        test_type_counts[test_type] = test_type_counts.get(test_type, 0) + 1
+        failure_class, model_err, eng_err, note = classify_failure(result)
+        result["failure_class"] = failure_class
+        result["should_count_as_model_error"] = model_err
+        result["should_count_as_engineering_error"] = eng_err
+        result["root_cause_note"] = note
+        if model_err:
+            model_limitations.append(str(result.get("case_id")))
+        if eng_err:
+            engineering_errors.append(str(result.get("case_id")))
+        if result.get("status") != "PASS":
+            non_pass_cases.append(
+                {
+                    "case_id": result.get("case_id"),
+                    "status": result.get("status"),
+                    "test_type": result.get("test_type"),
+                    "failure_class": failure_class,
+                    "root_cause_note": note,
+                }
+            )
+    report["summary"] = {
+        "counts_by_status": summary_counts,
+        "counts_by_test_type": test_type_counts,
+        "engineering_errors": sorted(engineering_errors),
+        "model_limitations": sorted(model_limitations),
+        "non_pass_cases": non_pass_cases,
+        "known_issue_reclassifications": [
+            {
+                "name": "video_http_pipeline_issues",
+                "rule": "If video/http failures are later proven to come from evaluator media serving or timeout handling and re-run passes, exclude the historical failures from model error counts.",
+            }
+        ],
     }
     write_json(report_json, report)
     report_md.write_text(render_markdown(results, preflight), encoding="utf-8")

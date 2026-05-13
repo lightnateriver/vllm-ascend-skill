@@ -54,6 +54,16 @@
 - JSON 报告会以结构化字段保存同样的完整请求输入和完整模型输出，便于后续程序化分析。
 - 报告头部包含服务配置表，显示 dtype、chunked prefill、async scheduling、prefix caching、function calling 等启动参数。
 
+## 判责边界
+
+这个 skill 的价值不只是跑出 `PASS/FAIL`，而是把问题拆成不同层级：
+
+- `Phase 1 ingestion FAIL` 优先按 `Engineering Error` 候选处理。
+- `Phase 2 semantic FAIL` 且 ingestion 已通过时，优先按 `Model Capability Limitation` 候选处理。
+- 输出没有稳定落到要求短格式时，应单列为 `Output Format / Protocol Issue`，不要直接算成视觉能力失败。
+
+如果视频或 HTTP case 后续被证明是测试链路、静态服务或 timeout 策略问题，并且修复后 rerun 通过，那么历史失败不应继续计入模型错误。
+
 ## 目录结构
 
 ```text
@@ -131,6 +141,8 @@ bash scripts/start_qwen35_4b_vllm.sh
 python3 -m http.server 9000 --directory /path/to/project
 ```
 
+建议在正式跑 capability 前，先直接 `curl` 一个图片 URL 和一个视频 URL，确认静态服务真的能把测试素材暴露出来。
+
 ### 4. 跑 checklist
 
 基础用法（仅 file_url + base64）：
@@ -168,6 +180,14 @@ python scripts/run_multimodal_capability_tests.py \
 4. **语义理解汇总** — 所有语义测试的汇总矩阵
 5. **失败 Case 明细** — 失败的 case 及其 HTTP 状态和输出摘要
 6. **完整 Case 输入与输出** — 包含完整请求 Payload 和完整模型回答
+
+JSON 报告建议优先消费结构化摘要字段，用于后续统一汇总：
+
+- `counts_by_status`
+- `counts_by_test_type`
+- `engineering_errors`
+- `model_limitations`
+- `non_pass_cases`
 
 ### 5. 配置参数说明
 
@@ -265,6 +285,8 @@ PASS | FC-005 [多工具并行] 并行调用：['get_weather', 'calculate']
 - 模型是否真的理解错了
 
 如果某个 case 的回答明显被截断，需要结合完整 Markdown 报告里的请求 Payload、完整输出和 JSON 里的原始结果判断问题来源，不要直接把它归类为媒体格式不支持。
+
+如果 capability rerun 已经证明某个历史问题属于测试链路修复项，那么最终验收报告里应把它归为已解决工程问题，而不是继续累计为模型错误。
 
 ## 相关文件
 

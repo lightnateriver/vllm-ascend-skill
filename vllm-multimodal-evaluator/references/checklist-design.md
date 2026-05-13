@@ -77,3 +77,12 @@ The Markdown report should include full reproduction detail for each case:
 - the per-case output token limit shown in summary tables
 
 The JSON report should keep the same request payload and full output in structured fields.
+## Failure Attribution Addendum
+
+Use the checklist in two layers: ingestion first, semantics second. When summarizing results for acceptance:
+
+- classify media ingestion failures as `Engineering Error` candidates first
+- classify semantic failures after successful ingestion as `Model Capability Limitation` candidates first
+- classify explanation-heavy or unconstrained outputs that do not collapse to the required short format as `Output Format / Protocol Issue`
+
+If a historical capability failure is later fixed by repairing the evaluator pipeline, timeout handling, or static media serving, exclude that historical failure from the model error count and record it as a resolved engineering issue.

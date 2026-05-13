@@ -14,3 +14,19 @@ Included files in each case directory:
 - `answer.md`
 - `answer.json`
 - `*.jpg` images ordered by filename prefix
+# Multi-Pics Cases
+
+每个 case 目录都用于 `multi_pics_eval.py` 的结构化读取和判分。维护时请保持下面几个约定稳定：
+
+- `question.md`：给模型的题目文本
+- `answer.md`：面向人类查看的标准答案说明
+- `answer.json`：脚本真正依赖的结构化答案
+- 图片文件：参与该 case 的固定输入素材
+
+如果你修改了题目或答案，请优先同步 `answer.json`，不要只改自然语言说明。
+
+这个目录下的 case 主要用于 `L0.5` 多图精度测试，结果解释建议如下：
+
+- 能正确抽取但答错，优先看作模型能力不足
+- 无法抽取到短答案，优先看作输出格式或协议问题
+- 请求异常、超时、HTTP 失败，优先看作工程或服务问题

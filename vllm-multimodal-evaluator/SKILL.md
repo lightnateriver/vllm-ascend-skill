@@ -66,6 +66,12 @@ If the user wants you to start the model service as part of the evaluation, use 
   ```
 - Ascend NPU users should source their ascend-toolkit environment before running.
 
+### 3.5 HTTP Static Server Validation
+
+- When HTTP mode is in scope, verify one image URL and one video URL directly before the capability run.
+- If HTTP-only failures appear while `file_url` or Base64 pass, treat the issue as static-file serving or transport first.
+- Keep the static media root and direct validation command in the final report.
+
 ### 4. Run the multimodal checklist
 
 Use [scripts/run_multimodal_capability_tests.py](scripts/run_multimodal_capability_tests.py) to send the capability matrix to the target service and write a machine-readable plus human-readable report.
@@ -185,6 +191,13 @@ Do not treat every FAIL as an unsupported media type. The two-phase design helps
 
 The default script already uses stronger prompts and larger `max_completion_tokens` for multi-image and video cases to reduce false negatives from verbose reasoning.
 
+### 6.5 Capability Root-Cause Policy
+
+- Ingestion failures are engineering or pipeline candidates first.
+- Semantic failures after successful ingestion are model capability candidates first, unless timeout or truncation dominates the behavior.
+- Output that does not collapse to the required short format should be reported as a protocol or formatting issue, not blindly counted as a vision failure.
+- If a historical video or HTTP failure is later fixed by repairing evaluator transport handling, static media serving, or timeout policy, remove that historical case from the model error count.
+
 ### 7. Keep reports reproducible
 
 When reporting results, include:
@@ -206,6 +219,17 @@ The Markdown report must keep enough information for reproduction and debugging:
 - the full model output for every case
 
 The JSON report stores the same request payload and full model output in machine-readable form.
+
+### 7.5 Standard Capability Summary
+
+- In addition to the detailed report, keep a compact summary for downstream acceptance reporting.
+- The compact summary should explicitly separate:
+  - `engineering_errors`
+  - `model_limitations`
+  - `not_counted_items`
+  - `counts_by_status`
+  - `counts_by_test_type`
+  - `artifact_paths`
 
 ## Operating Rules
 

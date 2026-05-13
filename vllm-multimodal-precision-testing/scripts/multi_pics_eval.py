@@ -307,6 +307,10 @@ def run_case(
         "media_mode": media_mode,
         "status": "unknown",
         "error_type": "unknown",
+        "failure_class": "unclassified",
+        "should_count_as_model_error": False,
+        "should_count_as_engineering_error": False,
+        "root_cause_note": "",
         "raw_prediction": "",
         "extracted_prediction": "UNKNOWN",
         "strict_raw_ok": False,
@@ -364,6 +368,32 @@ def run_case(
         result["status"] = "unknown"
         result["error_type"] = "request_error"
         result["raw_prediction"] = repr(exc)
+    if result["status"] == "correct":
+        result["failure_class"] = "none"
+        result["root_cause_note"] = "Prediction matched the expected short answer."
+    elif result["status"] == "wrong":
+        result["failure_class"] = "model_capability_gap"
+        result["should_count_as_model_error"] = True
+        if result["error_type"] == "strict_raw_mismatch":
+            result["root_cause_note"] = (
+                "Answer extracted correctly only partially or with extra text; output format drift under strict mode."
+            )
+        else:
+            result["root_cause_note"] = (
+                "Service returned a decodable answer, but the extracted prediction did not match the gold answer."
+            )
+    elif result["status"] in {"unknown", "timeout"}:
+        if str(result["error_type"]).startswith("http_") or result["error_type"] in {"request_error", "timeout"}:
+            result["failure_class"] = "pipeline_or_serving_issue"
+            result["should_count_as_engineering_error"] = True
+            result["root_cause_note"] = (
+                "Request did not complete cleanly due to HTTP, request, or timeout issues; treat as pipeline/serving issue first."
+            )
+        else:
+            result["failure_class"] = "output_format_or_extraction_issue"
+            result["root_cause_note"] = (
+                "Model output did not reliably collapse to the required short answer format; do not treat as a pure vision failure."
+            )
     return result
 
 
@@ -389,6 +419,31 @@ def summarize(results: list[dict[str, Any]], run_dir: Path, args: argparse.Names
         "case_ids": [item["case_id"] for item in results],
         "failed_cases": [
             item["case_id"] for item in results if item["status"] in {"wrong", "unknown", "timeout"}
+        ],
+        "failure_class_counts": {
+            "model_capability_gap": sum(1 for item in results if item["failure_class"] == "model_capability_gap"),
+            "pipeline_or_serving_issue": sum(1 for item in results if item["failure_class"] == "pipeline_or_serving_issue"),
+            "output_format_or_extraction_issue": sum(
+                1 for item in results if item["failure_class"] == "output_format_or_extraction_issue"
+            ),
+            "none": sum(1 for item in results if item["failure_class"] == "none"),
+        },
+        "engineering_error_cases": [
+            item["case_id"] for item in results if item["should_count_as_engineering_error"]
+        ],
+        "model_limitation_cases": [
+            item["case_id"] for item in results if item["should_count_as_model_error"]
+        ],
+        "wrong_cases_detailed": [
+            {
+                "case_id": item["case_id"],
+                "status": item["status"],
+                "error_type": item["error_type"],
+                "failure_class": item["failure_class"],
+                "root_cause_note": item["root_cause_note"],
+            }
+            for item in results
+            if item["status"] in {"wrong", "unknown", "timeout"}
         ],
     }
     return summary

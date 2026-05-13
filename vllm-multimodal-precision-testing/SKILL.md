@@ -47,6 +47,14 @@ When testing input-link behavior, prefer using the new shared media-mode layer i
 For `local_path`, the served model process must allow the media root via `--allowed-local-media-path`.
 For `http`, use a local static server such as `http://127.0.0.1:9000`, not a remote host.
 
+## Capability Gate Before Precision
+
+Use precision results only after the basic media path is trustworthy.
+
+- If video or HTTP media handling is unstable, first use `vllm-multimodal-evaluator` to prove ingestion and semantic capability separately.
+- Do not continue counting known evaluator pipeline problems as model errors after the capability rerun has passed.
+- Reuse the already-running service whenever possible. Avoid restarting the target service in the middle of a regression unless the user explicitly asks for it.
+
 ## L0 Smoke
 
 ### Goal
@@ -86,6 +94,15 @@ python3 scripts/l0_multimodal_smoke.py \
 
 - `10/10` pass means the finalized L0 suite is healthy.
 - Any failure should be treated as a real smoke regression until explained.
+
+### Root-Cause Triage for L0 Failures
+
+- `L0` failures should alert you immediately, but they still need a second-pass attribution.
+- Prefer splitting each failure into:
+  - `engineering or serving issue`
+  - `output format or extraction issue`
+  - `model capability limitation`
+- When a video case fails, check whether capability evaluation already proved the same transport path healthy before treating it as a model regression.
 
 ### Finalized Cases
 
@@ -193,6 +210,13 @@ Each case artifact keeps:
 - extracted prediction
 - final scoring status
 
+### Attribution Rule for L0.5 Outcomes
+
+- `wrong_answer` is usually a model capability limitation candidate.
+- `timeout`, `request_error`, and `http_xxx` are engineering or serving issue candidates.
+- `unknown` is not automatically a visual failure; it may reflect format drift, explanation-heavy outputs, or extraction instability.
+- Keep case-level artifacts so the final report can separate true model limitations from pipeline noise.
+
 ## L1 Benchmarks
 
 ### Goal
@@ -251,10 +275,11 @@ python3 scripts/run_full_regression.py \
 The unified runner:
 
 1. runs `L0`
-2. runs `MME`
-3. runs `MMBench_DEV_EN`
-4. prints a final JSON summary with per-step pass status
-5. auto-downloads missing `MME` and `MMBench_DEV_EN` TSV files by default
+2. runs `L0.5`
+3. runs `MME`
+4. runs `MMBench_DEV_EN`
+5. prints a final JSON summary with per-step pass status
+6. auto-downloads missing `MME` and `MMBench_DEV_EN` TSV files by default
 
 Optional flags:
 
@@ -281,6 +306,19 @@ Output artifacts are preserved by the underlying scripts:
   `*.pred.tsv` keeps the scored main rows with grouped `hit`.
 
 For `MME` and `MMBench`, the row outputs now also preserve transport metadata such as `media_mode`, `image_ref`, and `local_image_path`.
+
+## Standard Summary Outputs
+
+The final summary should explicitly separate:
+
+- `engineering_errors`
+- `model_limitations`
+- `output_format_or_protocol_issues`
+- `artifact_paths`
+- `l0`
+- `l05`
+- `mme`
+- `mmbench`
 
 ## L1 MME
 
@@ -409,6 +447,13 @@ For routine tuning comparisons, treat the following as a healthy minimum process
 4. Investigate any category-specific regression even if the overall score looks flat.
 
 Do not compare one run that used relaxed prompting against another run that used strong constrained prompting.
+
+## Final Attribution Policy
+
+- Do not mix evaluator transport failures with model semantic failures.
+- `Unknown` and `z_fallback` should be preserved as standalone diagnostics even when the final score looks acceptable.
+- If a historical issue was fixed by repairing the evaluation pipeline, keep it as a resolved engineering note rather than an active model error.
+- Small multimodal models may legitimately hit capability ceilings on FC, multi-image indexing, and reasoning-heavy categories; document these separately from engineering defects.
 
 ## Resources
 

@@ -152,3 +152,44 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 ## 版本说明
 
 当前仓库内容面向 `0.18` 分支维护。与 `vllm`、`vllm-ascend`、Ascend 环境相关的默认参数和工作流，以该分支中的 skill 内容为准。
+# vllm-ascend-skill
+
+这个仓库提供一组围绕 `vLLM` / `vllm-ascend` 的实用 skill，覆盖三个互补层面：
+
+- `vllm-ascend-use`：部署、对比和使用路径
+- `vllm-multimodal-evaluator`：多模态 capability 验证
+- `vllm-multimodal-precision-testing`：多模态 precision 回归
+
+## 推荐使用顺序
+
+建议按下面顺序使用，而不是一上来直接跑所有精度项：
+
+1. 先用 `vllm-ascend-use` 完成部署、探活和最小文本请求验证。
+2. 再用 `vllm-multimodal-evaluator` 确认图片、视频、`local_path` / `http` / `base64` 链路是否真的可用。
+3. 最后再用 `vllm-multimodal-precision-testing` 跑 `L0`、`L0.5`、`MME`、`MMBench`。
+
+## 仓库级判责约定
+
+为了避免把链路问题误报成模型问题，仓库内文档和脚本统一按下面三类口径解释失败：
+
+- `Engineering Error`：服务未启动、HTTP 拉取失败、请求超时、媒体路径不可读、测试脚本链路异常。
+- `Model Capability Limitation`：媒体读取成功，但语义理解、函数调用、多图检索或复杂推理没有达到预期。
+- `Output Format / Protocol Issue`：模型有回答，但没有稳定落到要求的短答案、`yes/no` 或选项字母格式。
+
+如果某个问题后续被 capability rerun 证明是测试链路问题，并且修复后通过，那么历史失败不应继续计入模型错误。
+
+## 推荐最终产物
+
+一次完整验收建议至少保留下面这些产物：
+
+- 部署命令和部署日志
+- `/v1/models` 和最小 `/v1/chat/completions` 探活结果
+- capability JSON/Markdown 报告
+- `L0` 摘要
+- `L0.5` 的 `summary.json/csv` 和逐 case JSON
+- `MME` 的 score/pred 文件
+- `MMBench` 的 acc/pred 文件
+- 一份统一汇总 JSON/Markdown，明确区分：
+  - `engineering_errors`
+  - `model_limitations`
+  - `output_format_or_protocol_issues`

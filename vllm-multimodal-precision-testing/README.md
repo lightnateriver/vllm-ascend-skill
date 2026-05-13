@@ -37,7 +37,7 @@
 4. `MMBench_DEV_EN` 本地精度测试
    使用官方 `MMBench_DEV_EN.tsv` 执行 MCQ 字母抽取与近似官方 heuristic 的 grouped scoring，并保留逐题结果。
 5. 一键回归执行
-   通过统一入口脚本，按 `L0 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果，同时支持统一切换媒体输入方式。
+   通过统一入口脚本，按 `L0 -> L0.5 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果，同时支持统一切换媒体输入方式。
 
 ## 新增能力
 
@@ -61,6 +61,16 @@
 - `L0`、`MME`、`MMBench` 默认用 `local_path`
 - `L1` 默认并发改为 `16`
 - `http` 只建议使用本机静态服务，不建议依赖远端图床
+
+## 判责与汇总约定
+
+这个 skill 不应该只产出一行准确率。建议统一按下面三类口径解释失败：
+
+- `Engineering Error`：服务未就绪、HTTP/请求错误、媒体链路异常、超时、脚本或运行环境问题。
+- `Model Capability Limitation`：媒体读取成功，但回答内容、函数调用、定位检索或推理表现不达标。
+- `Output Format / Protocol Issue`：模型有输出，但没有稳定落到短答案、`yes/no` 或选项字母要求。
+
+如果前置 capability 测试已经确认某个视频或 HTTP 问题来自测试链路，并且修复后 rerun 通过，那么 precision 报告里不应继续把该问题记成模型错误。
 
 ## 目标用途
 
