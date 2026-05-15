@@ -58,15 +58,42 @@ The scripts are thin utilities intended to reduce repeated manual work:
 - Companion child skill: `vllm-multimodal-evaluator`
   Use it when the task shifts from service deployment or benchmark generation to synthetic image or video fixture creation and multimodal capability matrix testing.
 
+### 4.5 Deployment Fallback Ladder
+
+- Start from the stock `vllm serve` path first and keep the exact launch command.
+- If the intended serving configuration is unstable, fall back to the most stable eager-mode deployment before doing any capability or precision judgment.
+- Keep deployment recovery simple:
+  1. confirm process startup and port bind
+  2. confirm `/v1/models`
+  3. confirm a minimal text `/v1/chat/completions` request
+  4. confirm local media path or HTTP media access only if multimodal evaluation is next
+- Preserve the deploy command, startup log, and health-check results before changing the configuration again.
+
 ## Operating Rules
 
 - Keep `vllm` and `vllm-ascend` versions matched. Treat version mismatch as the first thing to rule out.
 - Assume multimodal local file access is blocked unless `--allowed-local-media-path` is set to the parent directory that contains the files.
+- When HTTP media validation is needed, verify the static media URL directly before blaming the model or the server.
 - Use `--enforce-eager` for the controlled Ascend service flows in this skill. It is the safest baseline for debugging, profiling, and multimodal bring-up.
 - For multimodal TP deployments, treat `--mm-processor-cache-type shm` and `--mm-encoder-tp-mode data` as deliberate configuration choices, not defaults you can silently drop.
 - For accuracy comparison, keep the dataset order fixed, keep requests serial, keep `temperature=0`, make `max_completion_tokens` explicit, and disable `chunked prefill` when the purpose is to compare the inputs immediately before the LLM.
 - For this skill, the primary regression signal is whether the tensors and metadata immediately before the LLM are consistent between runs. Exact output-text match is optional and should not be the default pass or fail criterion.
 - Before blaming a modified build for input drift, run a baseline self-check first. If baseline vs baseline is already unstable at the pre-LLM input level, later mismatches are not a clean regression signal yet.
+
+## Standard Deployment Report
+
+- Keep a minimal deployment artifact set for every serious bring-up:
+  - `*_deploy_cmd_YYYY-MM-DD.txt`
+  - `*_deploy_log_YYYY-MM-DD.log`
+  - `*_healthcheck_YYYY-MM-DD.txt`
+  - `*_deployment_summary_YYYY-MM-DD.json`
+- The summary should capture:
+  - model path or served model id
+  - tp or parallelism settings
+  - key feature flags
+  - custom environment variables
+  - `/v1/models` result
+  - minimal chat validation result
 
 ## Practical Prompts
 

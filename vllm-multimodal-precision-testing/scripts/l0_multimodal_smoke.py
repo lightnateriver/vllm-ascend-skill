@@ -194,11 +194,28 @@ def main() -> int:
     parser.add_argument("--model", default="/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B")
     parser.add_argument(
         "--image-dir",
-        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/pics/720x1280/jpg",
+        default=str(
+            (
+                Path(__file__).resolve().parents[2]
+                / "vllm-multimodal-evaluator"
+                / "pics"
+                / "720x1280"
+                / "jpg"
+            ).resolve()
+        ),
     )
     parser.add_argument(
         "--video-path",
-        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/video/720x1280/mp4/shapes.mp4",
+        default=str(
+            (
+                Path(__file__).resolve().parents[2]
+                / "vllm-multimodal-evaluator"
+                / "video"
+                / "720x1280"
+                / "mp4"
+                / "shapes.mp4"
+            ).resolve()
+        ),
     )
     parser.add_argument(
         "--media-mode",

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Function Calling test runner for vLLM - relaxed evaluation."""
-import argparse, json, os, requests
+import argparse
+import json
+import os
+import sys
+
+import requests
 
 ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
 MODEL = "/root/gpufree-data/models/Qwen3-5-2B"
@@ -139,11 +144,19 @@ def main():
             }
         )
         status = "PASS" if passed else "FAIL"
-        print(f"{status:4s} | {cid} [{scene}] {out_msg}")
+        log_line = f"{status:4s} | {cid} [{scene}] {out_msg}"
+        if args.json:
+            print(log_line, file=sys.stderr)
+        else:
+            print(log_line)
 
     total = len(results)
     passed_count = sum(1 for item in results if item["passed"])
-    print(f"\n=== 汇总: {passed_count}/{total} 通过 ===")
+    summary_line = f"\n=== 汇总: {passed_count}/{total} 通过 ==="
+    if args.json:
+        print(summary_line, file=sys.stderr)
+    else:
+        print(summary_line)
     if args.json:
         summary = {
             "summary": {

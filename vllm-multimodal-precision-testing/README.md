@@ -37,7 +37,9 @@
 4. `MMBench_DEV_EN` 本地精度测试
    使用官方 `MMBench_DEV_EN.tsv` 执行 MCQ 字母抽取与近似官方 heuristic 的 grouped scoring，并保留逐题结果。
 5. 一键回归执行
-   通过统一入口脚本，按 `L0 -> L0.5 -> MME -> MMBench` 顺序执行，并输出一份最终总览结果，同时支持统一切换媒体输入方式。
+   通过统一入口脚本，按 `L0 -> L0.5 -> MME -> MMBench` 顺序执行，并默认对 `base64`、`local_path`、`http` 三种输入方式做全量测试和统一对比汇总。
+6. 标准化复测编排
+   通过标准复测入口，先跑 capability，再跑三模式全量 precision，并把结果统一归档到同一轮复测目录。
 
 ## 新增能力
 
@@ -56,9 +58,16 @@
 - `--media-base-url`
   `http` 模式下本地 HTTP 静态服务的基地址，例如 `http://127.0.0.1:9000`。
 
+另外建议补跑两类“评测脚本自身”的回归：
+
+- `脚本输出契约测试`
+  防止 `--json` 输出混入人类日志，或汇总字段结构漂移，导致上层自动化无法解析。
+- `传输模式一致性回归`
+  使用同一批 `L0` 固定样本比较 `base64`、`local_path`、`http` 三种媒体输入方式，确保样本总数一致且精度漂移保持在容忍范围内。
+
 默认建议：
 
-- `L0`、`MME`、`MMBench` 默认用 `local_path`
+- 标准回归默认同时执行 `base64`、`local_path`、`http` 三种输入模式
 - `L1` 默认并发改为 `16`
 - `http` 只建议使用本机静态服务，不建议依赖远端图床
 
@@ -207,18 +216,48 @@ python3 -m http.server 9000 --directory /your/media/root
 3. 再跑 `MME`
 4. 最后跑 `MMBench_DEV_EN`
 
-如果只是想一键执行，直接使用：
+如果只是想执行标准一键回归，直接使用：
 
 ```bash
-python scripts/run_full_regression.py
+python scripts/run_full_regression.py \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
 ```
 
-如果要统一切换为三种媒体输入之一，可以直接用：
+这会默认按 `base64 -> local_path -> http` 三种模式完整跑 `L0/L0.5/MME/MMBench`，并输出统一的跨模式汇总 JSON。
+
+如果要执行“标准复测流”，推荐直接使用：
+
+```bash
+python3 scripts/run_standard_retest.py \
+  --host http://127.0.0.1:8000 \
+  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000
+```
+
+这个入口会按固定顺序执行：
+
+1. `vllm-multimodal-evaluator` capability checklist
+2. `run_full_regression.py` 三模式全量 precision
+
+并默认把结果落到：
+
+```text
+retest-runs/<run_name>/
+├── capability/
+├── precision/
+│   └── precision_full/
+└── retest_summary.json / retest_summary.md
+```
+
+如果只想临时限制为某一种输入方式，可以直接用：
 
 ```bash
 python scripts/run_full_regression.py \
   --media-mode local_path \
-  --media-root /mnt/sfs_turbo/codes/lzp/vllm-ascend-precision-testing/l0_assets
+  --media-root /mnt/sfs_turbo
 ```
 
 或者：
@@ -226,9 +265,36 @@ python scripts/run_full_regression.py \
 ```bash
 python scripts/run_full_regression.py \
   --media-mode http \
-  --media-root /mnt/sfs_turbo/codes/lzp/vllm-ascend-precision-testing/l0_assets \
+  --media-root /mnt/sfs_turbo \
   --media-base-url http://127.0.0.1:9000
 ```
+
+如果只想显式指定一组模式，也可以使用：
+
+```bash
+python scripts/run_full_regression.py \
+  --media-modes base64 http \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
+```
+
+如果需要把 full regression 结果稳定归档到指定目录，也可以显式传：
+
+```bash
+python3 scripts/run_full_regression.py \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000 \
+  --output-root /mnt/sfs_turbo/log/vllm-ability \
+  --run-name qwen35_4b_three_mode_regression \
+  --json
+```
+
+这会产出：
+
+- `<output-root>/<run-name>/summary.json`
+- `<output-root>/<run-name>/summary.md`
+- `<output-root>/<run-name>/modes/<mode>/<step>/cmd.sh|stdout.txt|stderr.txt`
 
 如果要单独跑多图测试，推荐使用：
 
@@ -248,6 +314,44 @@ python scripts/multi_pics_eval.py \
 
 只有两者都成功才开始正式评测，避免把服务启动期噪声误判成模型精度问题。
 
+### 2.6. 传输模式一致性回归
+
+如果这次变更涉及媒体输入链路、静态文件服务或 evaluator 请求构造，建议额外执行：
+
+```bash
+python3 scripts/transport_consistency_check.py \
+  --host http://127.0.0.1:8000 \
+  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B/ \
+  --image-dir /mnt/sfs_turbo/codes/ascend/vllm-ascend-skill/vllm-multimodal-evaluator/pics/720x1280/jpg \
+  --video-path /mnt/sfs_turbo/codes/ascend/vllm-ascend-skill/vllm-multimodal-evaluator/video/720x1280/mp4/shapes.mp4 \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000 \
+  --json
+```
+
+判定规则：
+
+- 三种模式的 `total` 必须一致
+- `accuracy_span` 默认不得超过 `0.1`
+- 任一模式出现逐 case 请求失败或执行错误时，不得判为一致通过
+
+这个回归不是为了替代 `L0/L0.5/MME/MMBench`，而是为了快速发现“只有某一种媒体传输模式退化”的问题。
+
+### 2.7. 脚本输出契约自检
+
+如果环境里没有 `pytest`，可以直接运行仓库内置的轻量自检：
+
+```bash
+python3 /mnt/sfs_turbo/codes/ascend/vllm-ascend-skill/tests/run_self_checks.py
+```
+
+当前覆盖：
+
+- `fc_test.py --help` 和 `run_full_regression.py --help` 的关键参数暴露
+- `fc_test.py --json` 的机器可解析输出契约
+- 一键回归三模式汇总 JSON 的关键字段结构
+- 传输模式一致性比较逻辑的容差与样本数校验
+
 ### 2.5. 三种媒体输入的使用建议
 
 - `base64`
@@ -264,12 +368,15 @@ python scripts/multi_pics_eval.py \
 - `L0`
   JSON 输出会保留每个固定 case 的请求结果和返回内容。
 - `L0.5`
-  `multi-pics-runs/<run_name>/summary.json` 会保留整轮汇总和全部 case 明细。
-  `multi-pics-runs/<run_name>/summary.csv` 会保留每个 case 的计分结果。
-  `multi-pics-runs/<run_name>/<case>.json` 会保留题目、标准答案、原始回答、抽取结果和最终状态。
+  在一键回归下默认落到 `<run-root>/modes/<mode>/l05/`。
+  `summary.json` 会保留整轮汇总和全部 case 明细。
+  `summary.csv` 会保留每个 case 的计分结果。
+  `<case>.json` 会保留题目、标准答案、原始回答、抽取结果和最终状态。
 - `MME`
+  在一键回归下默认落到 `<run-root>/modes/<mode>/mme/`。
   `*.pred.tsv` 保留每道题的 `question`、`answer`、`prediction`、`extracted`、`score`。
 - `MMBench`
+  在一键回归下默认落到 `<run-root>/modes/<mode>/mmbench/`。
   `*.pred_all.tsv` 保留每道题和每个 circular 变体的 `question`、`answer`、`prediction`、`extracted`、`row_hit`。
   `*.pred.tsv` 保留最终计分主样本。
 
@@ -280,6 +387,19 @@ python scripts/multi_pics_eval.py \
 - `local_image_path`
 
 这样后续分析时可以直接看出某一次分数对应的是 `base64`、`local_path` 还是 `http`。
+
+### 3.1. 标准报告落盘约定
+
+后续默认能力/精度测试建议统一遵守下面的落盘约定：
+
+- capability 报告目录与 precision 报告目录分开
+- 顶层保留一份统一汇总 JSON/Markdown
+- precision 目录按 `mode -> step` 分层
+- 每个 step 至少保留：
+  - 启动命令
+  - `stdout`
+  - `stderr`
+  - 原始机器可读结果
 
 ### 4. 多图数据集设计
 

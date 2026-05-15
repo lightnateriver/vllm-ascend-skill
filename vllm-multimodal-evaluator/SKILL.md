@@ -1,6 +1,6 @@
 ---
 name: vllm-multimodal-evaluator
-description: Build simple shape-based multimodal test data and run two-phase capability checklists (format ingestion + semantic understanding) against a stock vLLM or vllm-ascend OpenAI-compatible service. Supports file://, Base64, and HTTP media modes. Reports include service config table (dtype, chunked-prefill, async-scheduling, prefix-caching, function calling). Use when you need to verify format-level media ingestion separately from model-level content understanding across three transport modes.
+description: Build simple shape-based multimodal test data and run two-phase capability checklists (format ingestion + semantic understanding) against a stock vLLM or vllm-ascend OpenAI-compatible service. Standard capability runs should cover file://, Base64, and HTTP together. Reports include service config table (dtype, chunked-prefill, async-scheduling, prefix-caching, function calling).
 ---
 
 # vLLM Multimodal Evaluator
@@ -99,7 +99,7 @@ The script accepts service configuration flags that are displayed in the report 
 
 #### Three media transport modes
 
-When `--media-base-url` is set, each capability is tested across all three transport modes:
+For standard capability acceptance, `--media-base-url` should be set so each capability is tested across all three transport modes:
 
 | Mode | URL format | Requirements |
 |------|-----------|-------------|
@@ -107,7 +107,7 @@ When `--media-base-url` is set, each capability is tested across all three trans
 | `base64` | `data:image/jpeg;base64,...` | No extra configuration |
 | `http` | `http://host:port/path/to/file.jpg` | Static file server + `--media-base-url` |
 
-Example with full config and HTTP mode:
+Example with full config and standard three-mode coverage:
 
 ```bash
 python scripts/run_multimodal_capability_tests.py \
@@ -118,7 +118,8 @@ python scripts/run_multimodal_capability_tests.py \
   --async-scheduling True \
   --prefix-caching True \
   --function-calling True \
-  --media-base-url http://127.0.0.1:9000
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
 ```
 
 #### Report structure
@@ -210,6 +211,8 @@ When reporting results, include:
 - media transport modes tested (file_url, base64, http)
 - PASS or FAIL counts by category (separated for ingestion and semantic)
 - any residual failures that look like real capability gaps
+
+When the user asks for a full retest rather than capability-only work, keep using this evaluator for the capability gate, then hand off to the precision skill's standard retest entrypoint so capability and precision artifacts stay under one shared run directory.
 
 The Markdown report must keep enough information for reproduction and debugging:
 

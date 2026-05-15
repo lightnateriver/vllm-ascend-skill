@@ -1,31 +1,99 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
+import functools
 import json
+import shlex
+import socketserver
 import ssl
 import subprocess
 import sys
+import threading
 import urllib.request
+import urllib.parse
+from datetime import datetime, timezone
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent.parent.resolve()
+DEFAULT_L0_IMAGE_DIR = str((REPO_ROOT / "vllm-multimodal-evaluator" / "pics" / "720x1280" / "jpg").resolve())
+DEFAULT_L0_VIDEO_PATH = str((REPO_ROOT / "vllm-multimodal-evaluator" / "video" / "720x1280" / "mp4" / "shapes.mp4").resolve())
+DEFAULT_MEDIA_ROOT = "/mnt/sfs_turbo"
+DEFAULT_MEDIA_BASE_URL = "http://127.0.0.1:9000"
+DEFAULT_MEDIA_MODES = ("base64", "local_path", "http")
+DEFAULT_OUTPUT_ROOT = str((SCRIPT_DIR.parent / "regression-runs").resolve())
 MME_URL = "https://opencompass.openxlab.space/utils/VLMEval/MME.tsv"
 MMBENCH_URL = "https://opencompass.openxlab.space/utils/benchmarks/MMBench/MMBench_DEV_EN.tsv"
 
 
+class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return 200 <= response.status < 400
+    except Exception:
+        return False
+
+
+@contextlib.contextmanager
+def maybe_start_media_server(
+    media_base_url: str,
+    media_root: str,
+    auto_start: bool,
+):
+    if not auto_start or not media_base_url:
+        yield
+        return
+
+    parsed = urllib.parse.urlparse(media_base_url)
+    host = parsed.hostname or ""
+    port = parsed.port or 80
+    if parsed.scheme != "http" or host not in {"127.0.0.1", "localhost"}:
+        yield
+        return
+
+    if is_url_reachable(media_base_url, timeout=2.0):
+        yield
+        return
+
+    root = Path(media_root).expanduser().resolve()
+    handler = functools.partial(QuietHTTPRequestHandler, directory=str(root))
+    httpd = ReusableThreadingHTTPServer((host, port), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run the full multimodal regression stack: L0, L0.5 multi-pics, MME, and MMBench."
+        description=(
+            "Run the full multimodal regression stack. By default this now executes "
+            "L0, L0.5, MME, and MMBench across base64, local_path, and http."
+        )
     )
     parser.add_argument("--host", default="http://127.0.0.1:8000")
     parser.add_argument("--model", default="/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B")
     parser.add_argument(
         "--image-dir",
-        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/pics/720x1280/jpg",
+        default=DEFAULT_L0_IMAGE_DIR,
     )
     parser.add_argument(
         "--video-path",
-        default="/mnt/sfs_turbo/codes/lzp/vllm_multimodal_evaluator/video/720x1280/mp4/shapes.mp4",
+        default=DEFAULT_L0_VIDEO_PATH,
     )
     parser.add_argument("--mme-tsv", default="/tmp/MME.tsv")
     parser.add_argument("--mmbench-tsv", default="/tmp/MMBench_DEV_EN.tsv")
@@ -39,25 +107,55 @@ def parse_args():
     parser.add_argument("--concurrency", type=int, default=16, help="L1 benchmark concurrency")
     parser.add_argument("--timeout", type=int, default=180, help="L1 benchmark request timeout")
     parser.add_argument(
+        "--media-modes",
+        nargs="+",
+        choices=["base64", "local_path", "http"],
+        default=list(DEFAULT_MEDIA_MODES),
+        help="Transport modes to execute. Defaults to all three: base64 local_path http.",
+    )
+    parser.add_argument(
         "--media-mode",
         choices=["base64", "local_path", "http"],
-        default="local_path",
-        help="How to send media for L0 and L1 image benchmarks.",
+        default=None,
+        help="Deprecated single-mode override. If set, the run executes only this one mode.",
     )
     parser.add_argument(
         "--media-root",
-        default="",
+        default=DEFAULT_MEDIA_ROOT,
         help="Local media root used for local_path/http modes. For local_path, serve must allow this path.",
     )
     parser.add_argument(
         "--media-base-url",
-        default="",
+        default=DEFAULT_MEDIA_BASE_URL,
         help="Base URL for local HTTP media serving, for example http://127.0.0.1:9000 .",
     )
+    parser.add_argument(
+        "--auto-start-media-server",
+        dest="auto_start_media_server",
+        action="store_true",
+        help="Auto-start a local static HTTP server for localhost/127.0.0.1 media-base-url when needed.",
+    )
+    parser.add_argument(
+        "--no-auto-start-media-server",
+        dest="auto_start_media_server",
+        action="store_false",
+        help="Disable the default local static HTTP server auto-start behavior.",
+    )
+    parser.set_defaults(auto_start_media_server=True)
     parser.add_argument("--skip-l0", action="store_true")
     parser.add_argument("--skip-l05", action="store_true")
     parser.add_argument("--skip-mme", action="store_true")
     parser.add_argument("--skip-mmbench", action="store_true")
+    parser.add_argument(
+        "--output-root",
+        default=DEFAULT_OUTPUT_ROOT,
+        help="Root directory where this regression run stores artifacts and summary files.",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Optional explicit run directory name under --output-root.",
+    )
     parser.add_argument("--no-auto-download", action="store_true", help="Do not auto-download missing TSV files.")
     parser.add_argument("--json", action="store_true", help="Print only final summary JSON.")
     return parser.parse_args()
@@ -83,24 +181,163 @@ def download_if_missing(path_str, url, label, auto_download):
     return {"label": label, "path": str(path), "downloaded": True}
 
 
-def run_json_step(name, cmd):
+def build_run_dir(output_root: str, run_name: str | None) -> Path:
+    root = Path(output_root).expanduser().resolve()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return root / (run_name or f"full_regression_{timestamp}")
+
+
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def write_json(path: Path, payload) -> None:
+    write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def render_shell_cmd(cmd) -> str:
+    return " ".join(shlex.quote(part) for part in cmd)
+
+
+def extract_json_suffix(stdout: str):
+    lines = stdout.splitlines()
+    for idx, line in enumerate(lines):
+        if not line.lstrip().startswith("{"):
+            continue
+        candidate = "\n".join(lines[idx:])
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def run_json_step(name, cmd, step_dir: Path):
+    step_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    cmd_path = step_dir / "cmd.sh"
+    stdout_path = step_dir / "stdout.txt"
+    stderr_path = step_dir / "stderr.txt"
+    process_meta_path = step_dir / "process.json"
+    write_text(cmd_path, render_shell_cmd(cmd) + "\n")
+    write_text(stdout_path, proc.stdout)
+    write_text(stderr_path, proc.stderr)
     result = {
         "name": name,
         "cmd": cmd,
         "returncode": proc.returncode,
         "stdout": proc.stdout,
         "stderr": proc.stderr,
+        "artifacts": {
+            "step_dir": str(step_dir),
+            "command": str(cmd_path),
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+            "process": str(process_meta_path),
+        },
     }
-    try:
-        result["parsed"] = json.loads(proc.stdout)
-    except Exception:
-        result["parsed"] = None
+    result["parsed"] = extract_json_suffix(proc.stdout)
+    write_json(
+        process_meta_path,
+        {
+            "name": name,
+            "returncode": proc.returncode,
+            "command": cmd,
+            "parsed_json_available": result["parsed"] is not None,
+        },
+    )
     return result
 
 
-def build_summary(step_results):
+def step_passed(step_name, parsed, returncode):
+    if step_name == "l0":
+        return bool(parsed and parsed.get("summary", {}).get("failed", 1) == 0 and returncode == 0)
+    if step_name == "l05":
+        return bool(
+            parsed
+            and parsed.get("wrong", 0) == 0
+            and parsed.get("unknown", 0) == 0
+            and parsed.get("timeout", 0) == 0
+            and returncode == 0
+        )
+    return returncode == 0 and parsed is not None
+
+
+def build_mode_step(mode, step_name, step_result):
+    parsed = step_result["parsed"]
+    return {
+        "passed": step_passed(step_name, parsed, step_result["returncode"]),
+        "returncode": step_result["returncode"],
+        "parsed": parsed,
+        "stderr": step_result["stderr"].strip(),
+        "cmd": step_result["cmd"],
+        "media_mode": mode,
+        "artifacts": step_result["artifacts"],
+    }
+
+
+def extract_step_precision(summary, step_name, parsed):
+    if step_name == "l0":
+        summary["precision_summary"]["l0"] = parsed.get("summary", {})
+        summary["artifact_paths"]["l0"] = parsed.get("artifacts", {})
+        if parsed.get("summary", {}).get("failed", 0):
+            summary["final_verdict"]["notes"].append(
+                "L0 reported failing smoke cases; these should be triaged before claiming full precision readiness."
+            )
+    elif step_name == "l05":
+        summary["precision_summary"]["l05"] = {
+            "total": parsed.get("total"),
+            "correct": parsed.get("correct"),
+            "wrong": parsed.get("wrong"),
+            "unknown": parsed.get("unknown"),
+            "timeout": parsed.get("timeout"),
+            "accuracy": parsed.get("accuracy"),
+            "failed_cases": parsed.get("failed_cases", []),
+            "failure_class_counts": parsed.get("failure_class_counts", {}),
+        }
+        summary["artifact_paths"]["l05"] = {
+            "run_name": parsed.get("run_name"),
+            "dataset_dir": parsed.get("dataset_dir"),
+        }
+        summary["engineering_errors"].extend(parsed.get("engineering_error_cases", []))
+        summary["model_limitations"].extend(parsed.get("model_limitation_cases", []))
+        summary["format_or_protocol_issues"].extend(
+            [
+                item.get("case_id")
+                for item in parsed.get("wrong_cases_detailed", [])
+                if item.get("failure_class") == "output_format_or_extraction_issue"
+            ]
+        )
+    elif step_name == "mme":
+        summary["precision_summary"]["mme"] = {
+            "exact_acc": parsed.get("exact_acc"),
+            "unknown": parsed.get("unknown"),
+            "perception": parsed.get("scores", {}).get("perception"),
+            "reasoning": parsed.get("scores", {}).get("reasoning"),
+            "category_scores": parsed.get("scores", {}),
+        }
+        summary["artifact_paths"]["mme"] = {
+            "pred_path": parsed.get("pred_path"),
+            "score_path": parsed.get("score_path"),
+        }
+    elif step_name == "mmbench":
+        summary["precision_summary"]["mmbench"] = {
+            "overall_acc": parsed.get("exact_acc"),
+            "z_fallback": parsed.get("z_fallback"),
+            "l2_scores": parsed.get("scores", {}),
+            "category_scores": parsed.get("scores", {}),
+        }
+        summary["artifact_paths"]["mmbench"] = {
+            "pred_all_path": parsed.get("pred_all_path"),
+            "pred_path": parsed.get("pred_path"),
+            "score_path": parsed.get("score_path"),
+        }
+
+
+def build_single_mode_summary(mode, step_results):
     summary = {
+        "media_mode": mode,
         "steps": {},
         "overall_pass": True,
         "precision_summary": {},
@@ -116,75 +353,11 @@ def build_summary(step_results):
     }
     for step in step_results:
         parsed = step["parsed"]
-        if step["name"] == "l0":
-            passed = bool(parsed and parsed.get("summary", {}).get("failed", 1) == 0 and step["returncode"] == 0)
-        elif step["name"] == "l05":
-            passed = bool(
-                parsed
-                and parsed.get("wrong", 0) == 0
-                and parsed.get("unknown", 0) == 0
-                and parsed.get("timeout", 0) == 0
-                and step["returncode"] == 0
-            )
-        else:
-            passed = step["returncode"] == 0 and parsed is not None
-
-        summary["steps"][step["name"]] = {
-            "passed": passed,
-            "returncode": step["returncode"],
-            "parsed": parsed,
-            "stderr": step["stderr"].strip(),
-        }
+        passed = step_passed(step["name"], parsed, step["returncode"])
+        summary["steps"][step["name"]] = build_mode_step(mode, step["name"], step)
         summary["overall_pass"] = summary["overall_pass"] and passed
-        if step["name"] == "l0" and parsed:
-            l0_summary = parsed.get("summary", {})
-            summary["precision_summary"]["l0"] = l0_summary
-            summary["artifact_paths"]["l0"] = parsed.get("artifacts", {})
-            if l0_summary.get("failed", 0):
-                summary["final_verdict"]["notes"].append(
-                    "L0 reported failing smoke cases; these should be triaged before claiming full precision readiness."
-                )
-        elif step["name"] == "l05" and parsed:
-            summary["precision_summary"]["l05"] = {
-                "total": parsed.get("total"),
-                "correct": parsed.get("correct"),
-                "wrong": parsed.get("wrong"),
-                "unknown": parsed.get("unknown"),
-                "timeout": parsed.get("timeout"),
-                "accuracy": parsed.get("accuracy"),
-                "failed_cases": parsed.get("failed_cases", []),
-                "failure_class_counts": parsed.get("failure_class_counts", {}),
-            }
-            summary["artifact_paths"]["l05"] = {
-                "run_name": parsed.get("run_name"),
-                "dataset_dir": parsed.get("dataset_dir"),
-            }
-            summary["engineering_errors"].extend(parsed.get("engineering_error_cases", []))
-            summary["model_limitations"].extend(parsed.get("model_limitation_cases", []))
-            summary["format_or_protocol_issues"].extend(
-                [
-                    item.get("case_id")
-                    for item in parsed.get("wrong_cases_detailed", [])
-                    if item.get("failure_class") == "output_format_or_extraction_issue"
-                ]
-            )
-        elif step["name"] == "mme" and parsed:
-            summary["precision_summary"]["mme"] = {
-                "exact_acc": parsed.get("exact_acc"),
-                "unknown": parsed.get("unknown"),
-                "perception": parsed.get("perception"),
-                "reasoning": parsed.get("reasoning"),
-                "category_scores": parsed.get("category_scores", {}),
-            }
-            summary["artifact_paths"]["mme"] = parsed.get("artifacts", {})
-        elif step["name"] == "mmbench" and parsed:
-            summary["precision_summary"]["mmbench"] = {
-                "overall_acc": parsed.get("overall_acc"),
-                "z_fallback": parsed.get("z_fallback"),
-                "l2_scores": parsed.get("l2_scores", {}),
-                "category_scores": parsed.get("category_scores", {}),
-            }
-            summary["artifact_paths"]["mmbench"] = parsed.get("artifacts", {})
+        if parsed:
+            extract_step_precision(summary, step["name"], parsed)
     summary["engineering_errors"] = sorted({str(item) for item in summary["engineering_errors"]})
     summary["model_limitations"] = sorted({str(item) for item in summary["model_limitations"]})
     summary["format_or_protocol_issues"] = sorted({str(item) for item in summary["format_or_protocol_issues"]})
@@ -200,16 +373,159 @@ def build_summary(step_results):
     return summary
 
 
+def summarize_mode_comparison(mode_summaries):
+    comparison = {}
+    for step_name in ("l0", "l05", "mme", "mmbench"):
+        per_mode = {}
+        for mode, summary in mode_summaries.items():
+            parsed = summary["steps"].get(step_name, {}).get("parsed")
+            if not parsed:
+                continue
+            if step_name == "l0":
+                per_mode[mode] = {
+                    "passed": parsed.get("summary", {}).get("passed"),
+                    "failed": parsed.get("summary", {}).get("failed"),
+                    "total": parsed.get("summary", {}).get("total"),
+                }
+            elif step_name == "l05":
+                per_mode[mode] = {
+                    "correct": parsed.get("correct"),
+                    "wrong": parsed.get("wrong"),
+                    "unknown": parsed.get("unknown"),
+                    "timeout": parsed.get("timeout"),
+                    "accuracy": parsed.get("accuracy"),
+                }
+            elif step_name == "mme":
+                per_mode[mode] = {
+                    "exact_acc": parsed.get("exact_acc"),
+                    "unknown": parsed.get("unknown"),
+                }
+            elif step_name == "mmbench":
+                per_mode[mode] = {
+                    "exact_acc": parsed.get("exact_acc"),
+                    "z_fallback": parsed.get("z_fallback"),
+                }
+        comparison[step_name] = per_mode
+    return comparison
+
+
+def format_metric(value):
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    return str(value)
+
+
+def render_markdown_table(headers, rows):
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(format_metric(item) for item in row) + " |")
+    return "\n".join(lines)
+
+
+def render_mode_comparison_markdown(summary):
+    sections = []
+    comparison = summary.get("mode_comparison", {})
+    step_configs = [
+        ("l0", "L0", ["Mode", "Passed", "Failed", "Total"], lambda item: [item.get("passed"), item.get("failed"), item.get("total")]),
+        ("l05", "L0.5", ["Mode", "Correct", "Wrong", "Unknown", "Timeout", "Accuracy"], lambda item: [item.get("correct"), item.get("wrong"), item.get("unknown"), item.get("timeout"), item.get("accuracy")]),
+        ("mme", "MME", ["Mode", "Exact Acc", "Unknown"], lambda item: [item.get("exact_acc"), item.get("unknown")]),
+        ("mmbench", "MMBench", ["Mode", "Overall Acc", "Z Fallback"], lambda item: [item.get("exact_acc"), item.get("z_fallback")]),
+    ]
+    for step_name, title, headers, row_builder in step_configs:
+        per_mode = comparison.get(step_name, {})
+        if not per_mode:
+            continue
+        rows = [[mode, *row_builder(item)] for mode, item in per_mode.items()]
+        sections.extend(
+            [
+                f"## {title}",
+                "",
+                render_markdown_table(headers, rows),
+                "",
+            ]
+        )
+    return "\n".join(sections).rstrip()
+
+
+def render_summary_markdown(summary):
+    lines = [
+        "# Full Multimodal Regression Summary",
+        "",
+        render_markdown_table(
+            ["Field", "Value"],
+            [
+                ["run_name", summary.get("run_name")],
+                ["artifact_root", summary.get("artifact_root")],
+                ["overall_pass", summary.get("overall_pass")],
+                ["requested_media_modes", ", ".join(summary.get("requested_media_modes", []))],
+            ],
+        ),
+        "",
+        "## Final Verdict",
+        "",
+    ]
+    notes = summary.get("final_verdict", {}).get("notes", [])
+    if notes:
+        for note in notes:
+            lines.append(f"- {note}")
+    else:
+        lines.append("- No additional notes.")
+    lines.extend(["", render_mode_comparison_markdown(summary)])
+    return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
+
+
+def build_summary(mode_summaries, downloads, requested_modes, run_dir: Path):
+    overall_pass = all(summary["overall_pass"] for summary in mode_summaries.values()) if mode_summaries else False
+    summary = {
+        "run_name": run_dir.name,
+        "artifact_root": str(run_dir),
+        "requested_media_modes": requested_modes,
+        "mode_count": len(requested_modes),
+        "modes": mode_summaries,
+        "mode_comparison": summarize_mode_comparison(mode_summaries),
+        "overall_pass": overall_pass,
+        "downloads": downloads,
+        "final_verdict": {
+            "all_modes_passed": overall_pass,
+            "required_modes": requested_modes,
+            "notes": [],
+        },
+    }
+    if not overall_pass:
+        failed_modes = [mode for mode, item in mode_summaries.items() if not item["overall_pass"]]
+        summary["final_verdict"]["notes"].append(
+            f"Some transport modes did not fully pass the regression stack: {', '.join(failed_modes)}."
+        )
+    return summary
+
+
 def main():
     args = parse_args()
-    steps = []
     downloads = []
+    requested_modes = [args.media_mode] if args.media_mode else list(dict.fromkeys(args.media_modes))
+    endpoint = f"{args.host.rstrip('/')}/v1/chat/completions"
+    run_dir = build_run_dir(args.output_root, args.run_name)
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    if not args.skip_l0:
-        steps.append(
-            (
-                "l0",
-                [
+    if not args.skip_mme:
+        downloads.append(download_if_missing(args.mme_tsv, MME_URL, "mme", not args.no_auto_download))
+
+    if not args.skip_mmbench:
+        downloads.append(download_if_missing(args.mmbench_tsv, MMBENCH_URL, "mmbench", not args.no_auto_download))
+
+    mode_summaries = {}
+
+    with maybe_start_media_server(args.media_base_url, args.media_root, args.auto_start_media_server):
+        for mode in requested_modes:
+            steps = []
+            mode_dir = run_dir / "modes" / mode
+            if not args.skip_l0:
+                cmd = [
                     sys.executable,
                     str(SCRIPT_DIR / "l0_multimodal_smoke.py"),
                     "--host",
@@ -221,49 +537,42 @@ def main():
                     "--video-path",
                     args.video_path,
                     "--media-mode",
-                    args.media_mode,
+                    mode,
                     "--json",
-                ],
-            )
-        )
-        if args.media_root:
-            steps[-1][1].extend(["--media-root", args.media_root])
-        if args.media_base_url:
-            steps[-1][1].extend(["--media-base-url", args.media_base_url])
+                ]
+                if args.media_root:
+                    cmd.extend(["--media-root", args.media_root])
+                if mode == "http" and args.media_base_url:
+                    cmd.extend(["--media-base-url", args.media_base_url])
+                steps.append(("l0", cmd))
 
-    if not args.skip_l05:
-        steps.append(
-            (
-                "l05",
-                [
+            if not args.skip_l05:
+                l05_dir = mode_dir / "l05"
+                cmd = [
                     sys.executable,
                     str(SCRIPT_DIR / "multi_pics_eval.py"),
                     "--dataset-dir",
                     args.l05_dataset_dir,
                     "--endpoint",
-                    endpoint if 'endpoint' in locals() else f"{args.host.rstrip('/')}/v1/chat/completions",
+                    endpoint,
                     "--model",
                     args.model,
                     "--media-mode",
-                    args.media_mode,
+                    mode,
                     "--wait-ready",
+                    "--output-dir",
+                    str(l05_dir),
                     "--json",
-                ],
-            )
-        )
-        if args.media_root:
-            steps[-1][1].extend(["--media-root", args.media_root])
-        if args.media_base_url:
-            steps[-1][1].extend(["--media-base-url", args.media_base_url])
+                ]
+                if args.media_root:
+                    cmd.extend(["--media-root", args.media_root])
+                if mode == "http" and args.media_base_url:
+                    cmd.extend(["--media-base-url", args.media_base_url])
+                steps.append(("l05", cmd))
 
-    endpoint = f"{args.host.rstrip('/')}/v1/chat/completions"
-
-    if not args.skip_mme:
-        downloads.append(download_if_missing(args.mme_tsv, MME_URL, "mme", not args.no_auto_download))
-        steps.append(
-            (
-                "mme",
-                [
+            if not args.skip_mme:
+                mme_prefix = mode_dir / "mme" / "mme_qwen35_4b"
+                cmd = [
                     sys.executable,
                     str(SCRIPT_DIR / "mme_eval_local.py"),
                     "--tsv",
@@ -280,22 +589,20 @@ def main():
                     str(args.concurrency),
                     "--timeout",
                     str(args.timeout),
+                    "--out-prefix",
+                    str(mme_prefix),
                     "--media-mode",
-                    args.media_mode,
-                ],
-            )
-        )
-        if args.media_root:
-            steps[-1][1].extend(["--media-root", args.media_root])
-        if args.media_base_url:
-            steps[-1][1].extend(["--media-base-url", args.media_base_url])
+                    mode,
+                ]
+                if args.media_root:
+                    cmd.extend(["--media-root", args.media_root])
+                if mode == "http" and args.media_base_url:
+                    cmd.extend(["--media-base-url", args.media_base_url])
+                steps.append(("mme", cmd))
 
-    if not args.skip_mmbench:
-        downloads.append(download_if_missing(args.mmbench_tsv, MMBENCH_URL, "mmbench", not args.no_auto_download))
-        steps.append(
-            (
-                "mmbench",
-                [
+            if not args.skip_mmbench:
+                mmbench_prefix = mode_dir / "mmbench" / "mmbench_dev_en_qwen35_4b"
+                cmd = [
                     sys.executable,
                     str(SCRIPT_DIR / "mmbench_eval_local.py"),
                     "--tsv",
@@ -312,29 +619,38 @@ def main():
                     str(args.concurrency),
                     "--timeout",
                     str(args.timeout),
+                    "--out-prefix",
+                    str(mmbench_prefix),
                     "--media-mode",
-                    args.media_mode,
-                ],
-            )
-        )
-        if args.media_root:
-            steps[-1][1].extend(["--media-root", args.media_root])
-        if args.media_base_url:
-            steps[-1][1].extend(["--media-base-url", args.media_base_url])
+                    mode,
+                ]
+                if args.media_root:
+                    cmd.extend(["--media-root", args.media_root])
+                if mode == "http" and args.media_base_url:
+                    cmd.extend(["--media-base-url", args.media_base_url])
+                steps.append(("mmbench", cmd))
 
-    step_results = []
-    for name, cmd in steps:
-        result = run_json_step(name, cmd)
-        step_results.append(result)
-        if not args.json:
-            print(f"=== {name} ===")
-            if result["stdout"].strip():
-                print(result["stdout"].strip())
-            if result["stderr"].strip():
-                print(result["stderr"].strip(), file=sys.stderr)
+            step_results = []
+            for name, cmd in steps:
+                result = run_json_step(name, cmd, mode_dir / name)
+                step_results.append(result)
+                if not args.json:
+                    print(f"=== {mode} / {name} ===")
+                    if result["stdout"].strip():
+                        print(result["stdout"].strip())
+                    if result["stderr"].strip():
+                        print(result["stderr"].strip(), file=sys.stderr)
 
-    summary = build_summary(step_results)
-    summary["downloads"] = downloads
+            mode_summaries[mode] = build_single_mode_summary(mode, step_results)
+
+    summary = build_summary(mode_summaries, downloads, requested_modes, run_dir)
+    summary_paths = {
+        "json": str((run_dir / "summary.json").resolve()),
+        "md": str((run_dir / "summary.md").resolve()),
+    }
+    summary["summary_paths"] = summary_paths
+    write_json(run_dir / "summary.json", summary)
+    write_text(run_dir / "summary.md", render_summary_markdown(summary))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["overall_pass"] else 1
 

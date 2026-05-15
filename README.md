@@ -11,7 +11,7 @@
 - `vllm-multimodal-evaluator`
   面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖本地图片和视频测试数据生成、Qwen3.5-4B 本地媒体部署，以及两阶段测试（格式读取 + 语义理解），支持 `file://` / Base64 / HTTP 三种传输模式。报告头部包含服务配置表（dtype、chunked prefill、async scheduling、prefix caching、function calling）。
 - `vllm-multimodal-precision-testing`
-  面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0` 固定图片和视频冒烟测试、`L0.5` 的 `1~40` 张图多图精度测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试；现在统一支持 `base64`、`local_path` 和本地 `http` 三种输入方式，适合在模型调优或部署变更后做快速、可重复的多模态精度检查。
+  面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0` 固定图片和视频冒烟测试、`L0.5` 的 `1~40` 张图多图精度测试，以及 `L1` 的 `MME` 与 `MMBench_DEV_EN` 回归测试；标准流程默认对 `base64`、`local_path` 和本地 `http` 三种输入方式做全量测试与对比汇总。
 
 ## 仓库结构
 
@@ -141,6 +141,7 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
 同时，这个子 skill 当前的默认建议也已经固定下来：
 
 - `L1` 的 `MME` / `MMBench` 默认并发使用 `16`
+- 标准能力/精度测试默认都需要完成 `base64` / `local_path` / `http` 三种输入模式的全量测试
 - `local_path` 模式要求服务启动时配置 `--allowed-local-media-path`
 - `http` 模式只建议使用本机静态服务，例如 `http://127.0.0.1:9000`
 
@@ -193,3 +194,24 @@ python /root/.codex/skills/.system/skill-installer/scripts/install-skill-from-gi
   - `engineering_errors`
   - `model_limitations`
   - `output_format_or_protocol_issues`
+
+## 标准复测建议
+
+如果任务是“部署后完整复测”，现在推荐直接使用 `vllm-multimodal-precision-testing/scripts/run_standard_retest.py` 作为仓库级标准入口。
+
+它会按固定顺序执行：
+
+1. `vllm-multimodal-evaluator` capability 检查
+2. `vllm-multimodal-precision-testing` 的三模式全量 `L0/L0.5/MME/MMBench`
+
+并默认把同一轮复测结果统一落到：
+
+```text
+vllm-multimodal-precision-testing/retest-runs/<run_name>/
+```
+
+其中同时保留：
+
+- capability JSON/Markdown 报告
+- precision 三模式汇总 JSON/Markdown
+- 每个模式每个 step 的命令、标准输出和标准错误

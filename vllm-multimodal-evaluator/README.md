@@ -145,13 +145,17 @@ python3 -m http.server 9000 --directory /path/to/project
 
 ### 4. 跑 checklist
 
-基础用法（仅 file_url + base64）：
+标准用法：
 
 ```bash
 python scripts/run_multimodal_capability_tests.py \
   --base-url http://127.0.0.1:8000/v1 \
-  --model /path/to/Qwen3.5-4B
+  --model /path/to/Qwen3.5-4B \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
 ```
+
+标准能力测试默认应覆盖 `file_url` / `base64` / `http` 三种输入模式；如果没有显式提供 `--media-base-url`，就只能覆盖前两种，不能算完整能力验收。
 
 完整用法（含 HTTP 模式和所有服务配置标志）：
 
@@ -164,7 +168,8 @@ python scripts/run_multimodal_capability_tests.py \
   --async-scheduling True \
   --prefix-caching True \
   --function-calling True \
-  --media-base-url http://127.0.0.1:9000
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
 ```
 
 默认会输出：
@@ -189,6 +194,8 @@ JSON 报告建议优先消费结构化摘要字段，用于后续统一汇总：
 - `model_limitations`
 - `non_pass_cases`
 
+如果后续还要继续跑 precision，推荐把 capability 结果目录作为同一轮“标准复测”的前半段产物保留，并与 precision 一起归档到共享 run 目录中。对应的标准做法见 `vllm-multimodal-precision-testing/scripts/run_standard_retest.py`。
+
 ### 5. 配置参数说明
 
 | 参数 | 默认值 | 说明 |
@@ -204,7 +211,7 @@ JSON 报告建议优先消费结构化摘要字段，用于后续统一汇总：
 
 ## checklist 覆盖范围
 
-当 `--media-base-url` 设置时，以下每项能力会同时按 file_url / base64 / http 三种模式测试：
+标准能力测试要求以下每项能力尽量同时按 file_url / base64 / http 三种模式测试：
 
 | 能力项 | file_url | base64 | http |
 |--------|:--------:|:------:|:----:|
@@ -234,7 +241,23 @@ python scripts/fc_test.py \
   --model /path/to/Qwen3.5-4B
 ```
 
-`fc_test.py` 支持 `--endpoint`、`--model`、`--test-file` 三个参数。
+`fc_test.py` 支持 `--endpoint`、`--model`、`--test-file` 和 `--json` 参数。
+
+如果需要把结果接入自动化流水线，推荐使用 `--json`：
+
+```bash
+python scripts/fc_test.py \
+  --endpoint http://127.0.0.1:8000/v1/chat/completions \
+  --model /path/to/Qwen3.5-4B \
+  --json
+```
+
+在 `--json` 模式下：
+
+- `stdout` 只输出机器可解析的 JSON 汇总
+- 每个 case 的 `PASS` / `FAIL` 行和汇总提示会输出到 `stderr`
+
+这样既保留了人读日志，也避免脚本消费者被混合输出破坏解析。
 
 ### 测试用例
 

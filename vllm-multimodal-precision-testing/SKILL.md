@@ -1,6 +1,6 @@
 ---
 name: vllm-multimodal-precision-testing
-description: Run layered multimodal precision regression tests for local vLLM or vllm-ascend OpenAI-compatible services, especially Qwen3.5 and Qwen3-VL style models. Use when Codex needs to quickly smoke-test fixed image and video cases at L0, or run broader L1 benchmark checks with MME and MMBench after model tuning or deployment changes.
+description: Run layered multimodal precision regression tests for local vLLM or vllm-ascend OpenAI-compatible services, especially Qwen3.5 and Qwen3-VL style models. Use when Codex needs to run L0, L0.5, MME, and MMBench across base64, local_path, and http by default after model tuning or deployment changes.
 ---
 
 # vLLM Multimodal Precision Testing
@@ -12,7 +12,8 @@ Use this skill to run the verified multimodal regression stack against a local O
 - `L0`: fixed smoke suite for 7 images plus 3 video checks
 - `L0.5`: deterministic `1` to `40` multi-image precision dataset
 - `L1`: broader benchmark checks with `MME` and `MMBench_DEV_EN`
-- shared media input modes: `base64`, `local_path`, and local `http`
+- standard regression default: run all checks across `base64`, `local_path`, and local `http`
+- standard retest entrypoint: capability first, then three-mode full precision with unified artifact drop
 
 This skill is intended for repeatable post-tuning or post-deployment regression testing, not one-off demos.
 
@@ -252,10 +253,13 @@ Do not use `L1` as the first signal when the service itself may be broken.
 
 ## One-Command Run
 
-Use the unified runner when you want the standard regression order in one command:
+Use the unified runner when you want the standard regression order in one command. By default it executes all requested checks across all three media transport modes:
 
 ```bash
-python3 scripts/run_full_regression.py
+python3 scripts/run_full_regression.py \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
 ```
 
 Useful overrides:
@@ -267,29 +271,49 @@ python3 scripts/run_full_regression.py \
   --mme-tsv /tmp/MME.tsv \
   --mmbench-tsv /tmp/MMBench_DEV_EN.tsv \
   --concurrency 16 \
-  --media-mode local_path \
+  --media-modes base64 local_path http \
   --media-root /path/to/media/root \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server \
   --json
 ```
 
 The unified runner:
 
-1. runs `L0`
-2. runs `L0.5`
-3. runs `MME`
-4. runs `MMBench_DEV_EN`
-5. prints a final JSON summary with per-step pass status
-6. auto-downloads missing `MME` and `MMBench_DEV_EN` TSV files by default
+1. runs `L0`, `L0.5`, `MME`, and `MMBench_DEV_EN`
+2. repeats that full stack across `base64`, `local_path`, and `http` by default
+3. prints a final JSON summary with per-mode and cross-mode comparison status
+4. auto-downloads missing `MME` and `MMBench_DEV_EN` TSV files by default
+
+If you want the full acceptance flow rather than precision-only execution, use the standard retest entrypoint:
+
+```bash
+python3 scripts/run_standard_retest.py \
+  --host http://127.0.0.1:8000 \
+  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000
+```
+
+This orchestration:
+
+1. runs the capability gate first
+2. runs the three-mode full precision stack second
+3. writes a top-level `retest_summary.json` and `retest_summary.md`
+4. keeps capability and precision artifacts under one shared retest directory
 
 Optional flags:
 
 - `--skip-l0`
+- `--skip-l05`
 - `--skip-mme`
 - `--skip-mmbench`
 - `--no-auto-download`
+- `--media-modes`
 - `--media-mode`
 - `--media-root`
 - `--media-base-url`
+- `--auto-start-media-server`
 
 Output artifacts are preserved by the underlying scripts:
 
@@ -307,18 +331,27 @@ Output artifacts are preserved by the underlying scripts:
 
 For `MME` and `MMBench`, the row outputs now also preserve transport metadata such as `media_mode`, `image_ref`, and `local_image_path`.
 
+The unified runner itself now also preserves:
+
+- `<run-root>/summary.json`
+- `<run-root>/summary.md`
+- `<run-root>/modes/<mode>/<step>/cmd.sh`
+- `<run-root>/modes/<mode>/<step>/stdout.txt`
+- `<run-root>/modes/<mode>/<step>/stderr.txt`
+
 ## Standard Summary Outputs
 
 The final summary should explicitly separate:
 
-- `engineering_errors`
-- `model_limitations`
-- `output_format_or_protocol_issues`
-- `artifact_paths`
-- `l0`
-- `l05`
-- `mme`
-- `mmbench`
+- per-mode `engineering_errors`
+- per-mode `model_limitations`
+- per-mode `output_format_or_protocol_issues`
+- per-mode `artifact_paths`
+- per-mode `l0`
+- per-mode `l05`
+- per-mode `mme`
+- per-mode `mmbench`
+- cross-mode `mode_comparison`
 
 ## L1 MME
 

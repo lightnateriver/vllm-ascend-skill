@@ -1,9 +1,12 @@
 __pycache__/
 *.pyc
+tests/__pycache__/
 
 light_*.sh
+multi-pics-runs/
 
 vllm-multimodal-evaluator/pics/
+vllm-multimodal-evaluator/results/
 vllm-multimodal-evaluator/video/
 vllm-multimodal-evaluator/scripts/__pycache__/
 
@@ -22,4 +25,7 @@ vllm-multimodal-precision-testing/position/
 vllm-multimodal-precision-testing/posters/
 vllm-multimodal-precision-testing/scene/
 vllm-multimodal-precision-testing/scripts/__pycache__/
+vllm-multimodal-precision-testing/multi-pics-runs/
+vllm-multimodal-precision-testing/regression-runs/
+vllm-multimodal-precision-testing/retest-runs/
 vllm-multimodal-precision-testing/text_translation/

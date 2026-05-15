@@ -21,6 +21,7 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_MODEL = "/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B"
+DEFAULT_MEDIA_BASE_URL = "http://127.0.0.1:9000"
 
 # Service feature flags — set via CLI, shown in report header
 ServiceConfig = {
@@ -1162,7 +1163,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Qwen3.5-4B multimodal capability tests.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--results-dir", type=Path)
@@ -1175,8 +1176,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--auto-start-media-server",
+        dest="auto_start_media_server",
         action="store_true",
         help="Auto-start a local static HTTP server for --media-base-url when it points to localhost/127.0.0.1.",
+    )
+    parser.add_argument(
+        "--no-auto-start-media-server",
+        dest="auto_start_media_server",
+        action="store_false",
+        help="Disable the default local static HTTP server auto-start behavior.",
     )
     # Service config flags (for report header)
     parser.add_argument("--dtype", default=ServiceConfig["dtype"], help="Model precision (bfloat16/float16/float32)")
@@ -1186,7 +1194,12 @@ def main() -> None:
     parser.add_argument("--function-calling", default=ServiceConfig["function_calling"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
     parser.add_argument("--gpu-memory-utilization", type=float, default=ServiceConfig["gpu_memory_utilization"])
     parser.add_argument("--enforce-eager", default=ServiceConfig["enforce_eager"], type=lambda x: x.lower() in ("true", "1", "yes"), nargs="?", const=True)
-    parser.add_argument("--media-base-url", default=None, help="Base URL for HTTP mode media access, e.g. http://127.0.0.1:9000")
+    parser.add_argument(
+        "--media-base-url",
+        default=DEFAULT_MEDIA_BASE_URL,
+        help="Base URL for HTTP mode media access, e.g. http://127.0.0.1:9000",
+    )
+    parser.set_defaults(auto_start_media_server=True)
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
