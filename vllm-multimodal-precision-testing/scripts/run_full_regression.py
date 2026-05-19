@@ -261,6 +261,10 @@ def step_passed(step_name, parsed, returncode):
             and parsed.get("timeout", 0) == 0
             and returncode == 0
         )
+    if step_name == "transport_consistency":
+        return bool(parsed and parsed.get("comparison", {}).get("within_tolerance") and returncode == 0)
+    if step_name == "output_contract":
+        return bool(parsed and parsed.get("summary", {}).get("failed", 1) == 0 and returncode == 0)
     return returncode == 0 and parsed is not None
 
 
@@ -281,6 +285,25 @@ def extract_step_precision(summary, step_name, parsed):
     if step_name == "l0":
         summary["precision_summary"]["l0"] = parsed.get("summary", {})
         summary["artifact_paths"]["l0"] = parsed.get("artifacts", {})
+        failing_cases = [
+            item.get("id")
+            for item in parsed.get("results", [])
+            if not item.get("pass")
+        ]
+        engineering_cases = [
+            item.get("id")
+            for item in parsed.get("results", [])
+            if item.get("returncode", 0) != 0
+        ]
+        model_cases = [case_id for case_id in failing_cases if case_id not in engineering_cases]
+        summary["precision_summary"]["l0"]["failing_cases"] = failing_cases
+        summary["precision_summary"]["l0"]["failure_class_counts"] = {
+            "pipeline_or_serving_issue": len(engineering_cases),
+            "model_capability_gap": len(model_cases),
+            "output_format_or_extraction_issue": 0,
+        }
+        summary["engineering_errors"].extend(engineering_cases)
+        summary["model_limitations"].extend(model_cases)
         if parsed.get("summary", {}).get("failed", 0):
             summary["final_verdict"]["notes"].append(
                 "L0 reported failing smoke cases; these should be triaged before claiming full precision readiness."
@@ -333,6 +356,18 @@ def extract_step_precision(summary, step_name, parsed):
             "pred_path": parsed.get("pred_path"),
             "score_path": parsed.get("score_path"),
         }
+        summary["engineering_errors"].extend(parsed.get("engineering_error_cases", []))
+        summary["model_limitations"].extend(parsed.get("model_limitation_cases", []))
+        summary["format_or_protocol_issues"].extend(parsed.get("format_or_protocol_issue_cases", []))
+    elif step_name == "transport_consistency":
+        summary["precision_summary"]["transport_consistency"] = {
+            "within_tolerance": parsed.get("comparison", {}).get("within_tolerance"),
+            "accuracy_span": parsed.get("comparison", {}).get("accuracy_span"),
+            "totals": parsed.get("comparison", {}).get("totals", []),
+            "execution_error_modes": parsed.get("comparison", {}).get("execution_error_modes", {}),
+        }
+    elif step_name == "output_contract":
+        summary["precision_summary"]["output_contract"] = parsed.get("summary", {})
 
 
 def build_single_mode_summary(mode, step_results):
@@ -409,6 +444,21 @@ def summarize_mode_comparison(mode_summaries):
     return comparison
 
 
+def summarize_global_checks(global_checks):
+    comparison = {}
+    for name, result in global_checks.items():
+        parsed = result.get("parsed") or {}
+        if name == "transport_consistency":
+            comparison[name] = {
+                "within_tolerance": parsed.get("comparison", {}).get("within_tolerance"),
+                "accuracy_span": parsed.get("comparison", {}).get("accuracy_span"),
+                "totals": parsed.get("comparison", {}).get("totals", []),
+            }
+        elif name == "output_contract":
+            comparison[name] = parsed.get("summary", {})
+    return comparison
+
+
 def format_metric(value):
     if value is None:
         return ""
@@ -452,6 +502,50 @@ def render_mode_comparison_markdown(summary):
     return "\n".join(sections).rstrip()
 
 
+def render_global_checks_markdown(summary):
+    sections = []
+    global_checks = summary.get("global_checks", {})
+    if not global_checks:
+        return ""
+    rows = []
+    for name, result in global_checks.items():
+        parsed = result.get("parsed") or {}
+        if name == "transport_consistency":
+            rows.append(
+                [
+                    name,
+                    result.get("passed"),
+                    parsed.get("comparison", {}).get("within_tolerance"),
+                    parsed.get("comparison", {}).get("accuracy_span"),
+                    "",
+                ]
+            )
+        elif name == "output_contract":
+            contract_summary = parsed.get("summary", {})
+            rows.append(
+                [
+                    name,
+                    result.get("passed"),
+                    "",
+                    "",
+                    f"{contract_summary.get('passed', 0)}/{contract_summary.get('total', 0)} passed",
+                ]
+            )
+    if rows:
+        sections.extend(
+            [
+                "## Global Checks",
+                "",
+                render_markdown_table(
+                    ["Check", "Passed", "Within Tolerance", "Accuracy Span", "Notes"],
+                    rows,
+                ),
+                "",
+            ]
+        )
+    return "\n".join(sections).rstrip()
+
+
 def render_summary_markdown(summary):
     lines = [
         "# Full Multimodal Regression Summary",
@@ -475,12 +569,17 @@ def render_summary_markdown(summary):
             lines.append(f"- {note}")
     else:
         lines.append("- No additional notes.")
+    global_checks_md = render_global_checks_markdown(summary)
+    if global_checks_md:
+        lines.extend(["", global_checks_md])
     lines.extend(["", render_mode_comparison_markdown(summary)])
     return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
 
 
-def build_summary(mode_summaries, downloads, requested_modes, run_dir: Path):
-    overall_pass = all(summary["overall_pass"] for summary in mode_summaries.values()) if mode_summaries else False
+def build_summary(mode_summaries, global_checks, downloads, requested_modes, run_dir: Path):
+    mode_pass = all(summary["overall_pass"] for summary in mode_summaries.values()) if mode_summaries else False
+    global_pass = all(item.get("passed", False) for item in global_checks.values()) if global_checks else True
+    overall_pass = mode_pass and global_pass
     summary = {
         "run_name": run_dir.name,
         "artifact_root": str(run_dir),
@@ -488,6 +587,8 @@ def build_summary(mode_summaries, downloads, requested_modes, run_dir: Path):
         "mode_count": len(requested_modes),
         "modes": mode_summaries,
         "mode_comparison": summarize_mode_comparison(mode_summaries),
+        "global_checks": global_checks,
+        "global_check_summary": summarize_global_checks(global_checks),
         "overall_pass": overall_pass,
         "downloads": downloads,
         "final_verdict": {
@@ -498,9 +599,15 @@ def build_summary(mode_summaries, downloads, requested_modes, run_dir: Path):
     }
     if not overall_pass:
         failed_modes = [mode for mode, item in mode_summaries.items() if not item["overall_pass"]]
-        summary["final_verdict"]["notes"].append(
-            f"Some transport modes did not fully pass the regression stack: {', '.join(failed_modes)}."
-        )
+        if failed_modes:
+            summary["final_verdict"]["notes"].append(
+                f"Some transport modes did not fully pass the regression stack: {', '.join(failed_modes)}."
+            )
+        failed_global = [name for name, item in global_checks.items() if not item.get("passed", False)]
+        if failed_global:
+            summary["final_verdict"]["notes"].append(
+                f"Some regression self-checks failed: {', '.join(failed_global)}."
+            )
     return summary
 
 
@@ -518,9 +625,63 @@ def main():
     if not args.skip_mmbench:
         downloads.append(download_if_missing(args.mmbench_tsv, MMBENCH_URL, "mmbench", not args.no_auto_download))
 
-    mode_summaries = {}
-
     with maybe_start_media_server(args.media_base_url, args.media_root, args.auto_start_media_server):
+        global_checks = {}
+        transport_cmd = [
+            sys.executable,
+            str(SCRIPT_DIR / "transport_consistency_check.py"),
+            "--host",
+            args.host,
+            "--model",
+            args.model,
+            "--image-dir",
+            args.image_dir,
+            "--video-path",
+            args.video_path,
+            "--media-root",
+            args.media_root,
+            "--media-base-url",
+            args.media_base_url,
+            "--json",
+        ]
+        global_checks["transport_consistency"] = build_mode_step(
+            "global",
+            "transport_consistency",
+            run_json_step("transport_consistency", transport_cmd, run_dir / "global_checks" / "transport_consistency"),
+        )
+        contract_cmd = [
+            sys.executable,
+            str(SCRIPT_DIR / "output_contract_self_check.py"),
+            "--host",
+            args.host,
+            "--model",
+            args.model,
+            "--media-root",
+            args.media_root,
+            "--media-base-url",
+            args.media_base_url,
+            "--image-dir",
+            args.image_dir,
+            "--video-path",
+            args.video_path,
+            "--l05-dataset-dir",
+            args.l05_dataset_dir,
+            "--mme-tsv",
+            args.mme_tsv,
+            "--mmbench-tsv",
+            args.mmbench_tsv,
+            "--api-key",
+            args.api_key,
+            "--json",
+        ]
+        global_checks["output_contract"] = build_mode_step(
+            "global",
+            "output_contract",
+            run_json_step("output_contract", contract_cmd, run_dir / "global_checks" / "output_contract"),
+        )
+
+        mode_summaries = {}
+
         for mode in requested_modes:
             steps = []
             mode_dir = run_dir / "modes" / mode
@@ -643,7 +804,7 @@ def main():
 
             mode_summaries[mode] = build_single_mode_summary(mode, step_results)
 
-    summary = build_summary(mode_summaries, downloads, requested_modes, run_dir)
+    summary = build_summary(mode_summaries, global_checks, downloads, requested_modes, run_dir)
     summary_paths = {
         "json": str((run_dir / "summary.json").resolve()),
         "md": str((run_dir / "summary.md").resolve()),

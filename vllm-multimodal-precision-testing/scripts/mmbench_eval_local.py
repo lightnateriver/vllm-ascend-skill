@@ -266,25 +266,59 @@ def main():
 
     def run_one(i, row):
         prompt = build_prompt(row)
-        prediction = client.infer(prompt, row["image_ref"])
-        choices = build_choices(row)
-        extracted = can_infer(prediction, choices) or "Z"
-        return i, {
-            "index": int(row["index"]),
-            "g_index": int(int(row["index"]) % 1e6),
-            "image_path": row["cache_relpath"],
-            "media_mode": args.media_mode,
-            "image_ref": row["image_ref"],
-            "local_image_path": row["local_image_path"],
-            "question": row["question"],
-            "answer": str(row["answer"]).strip().upper(),
-            "prediction": prediction,
-            "extracted": extracted,
-            "row_hit": extracted == str(row["answer"]).strip().upper(),
-            "category": row.get("category"),
-            "l2-category": row.get("l2-category"),
-            "split": row.get("split"),
-        }
+        try:
+            prediction = client.infer(prompt, row["image_ref"])
+            choices = build_choices(row)
+            extracted = can_infer(prediction, choices) or "Z"
+            answer = str(row["answer"]).strip().upper()
+            row_hit = extracted == answer
+            if extracted == "Z":
+                failure_class = "output_format_or_extraction_issue"
+                root_cause_note = "Model did not reliably collapse to a single choice letter."
+            elif row_hit:
+                failure_class = "none"
+                root_cause_note = "Prediction matched the expected choice."
+            else:
+                failure_class = "model_capability_gap"
+                root_cause_note = "Request completed and decoded, but the predicted choice was wrong."
+            return i, {
+                "index": int(row["index"]),
+                "g_index": int(int(row["index"]) % 1e6),
+                "image_path": row["cache_relpath"],
+                "media_mode": args.media_mode,
+                "image_ref": row["image_ref"],
+                "local_image_path": row["local_image_path"],
+                "question": row["question"],
+                "answer": answer,
+                "prediction": prediction,
+                "extracted": extracted,
+                "row_hit": row_hit,
+                "category": row.get("category"),
+                "l2-category": row.get("l2-category"),
+                "split": row.get("split"),
+                "failure_class": failure_class,
+                "root_cause_note": root_cause_note,
+            }
+        except Exception as exc:  # noqa: BLE001
+            answer = str(row["answer"]).strip().upper()
+            return i, {
+                "index": int(row["index"]),
+                "g_index": int(int(row["index"]) % 1e6),
+                "image_path": row["cache_relpath"],
+                "media_mode": args.media_mode,
+                "image_ref": row["image_ref"],
+                "local_image_path": row["local_image_path"],
+                "question": row["question"],
+                "answer": answer,
+                "prediction": repr(exc),
+                "extracted": "Z",
+                "row_hit": False,
+                "category": row.get("category"),
+                "l2-category": row.get("l2-category"),
+                "split": row.get("split"),
+                "failure_class": "pipeline_or_serving_issue",
+                "root_cause_note": "Request failed before a stable choice answer was obtained; treat as serving or transport issue first.",
+            }
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = [pool.submit(run_one, i, row) for i, row in enumerate(rows)]
@@ -317,6 +351,15 @@ def main():
         "media_base_url": args.media_base_url,
         "exact_acc": float(pred_df["hit"].mean() * 100),
         "z_fallback": int((all_pred_df["extracted"] == "Z").sum()),
+        "failure_class_counts": {
+            "pipeline_or_serving_issue": int((all_pred_df["failure_class"] == "pipeline_or_serving_issue").sum()),
+            "model_capability_gap": int((all_pred_df["failure_class"] == "model_capability_gap").sum()),
+            "output_format_or_extraction_issue": int((all_pred_df["failure_class"] == "output_format_or_extraction_issue").sum()),
+            "none": int((all_pred_df["failure_class"] == "none").sum()),
+        },
+        "engineering_error_cases": all_pred_df.loc[all_pred_df["failure_class"] == "pipeline_or_serving_issue", "index"].astype(str).tolist(),
+        "model_limitation_cases": all_pred_df.loc[all_pred_df["failure_class"] == "model_capability_gap", "index"].astype(str).tolist(),
+        "format_or_protocol_issue_cases": all_pred_df.loc[all_pred_df["failure_class"] == "output_format_or_extraction_issue", "index"].astype(str).tolist(),
         "pred_all_path": str(pred_all_path),
         "pred_path": str(pred_path),
         "score_path": str(score_path),

@@ -1,4 +1,4 @@
 interface:
   display_name: "vLLM MM Precision"
-  short_description: "Run multimodal three-mode regression and retest flows"
-  default_prompt: "Use $vllm-multimodal-precision-testing to run the local multimodal regression stack across base64, local_path, and http, including L0, L0.5, MME, and MMBench checks, and prefer the standard retest entrypoint when capability plus precision need a unified artifact drop."
+  short_description: "Run default-on multimodal regression across three transport modes"
+  default_prompt: "Use $vllm-multimodal-precision-testing to run the default-on multimodal regression stack across base64, local_path, and http, including L0, L0.5, MME, MMBench, transport consistency, and output contract checks. Explain failures by separating engineering, protocol, and model-capability issues."

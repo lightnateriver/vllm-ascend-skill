@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from fractions import Fraction
 from pathlib import Path
 
@@ -8,11 +9,17 @@ from PIL import Image
 
 
 SOURCE_RESOLUTION = "720x1280"
-TARGET_RESOLUTIONS = {
+STANDARD_TARGET_RESOLUTIONS = {
     "720x1280": (720, 1280),
     "1080x1920": (1080, 1920),
 }
-VIDEO_FORMATS = ["mp4", "avi", "mov", "mkv"]
+LARGE_TARGET_RESOLUTIONS = {
+    "4096x4096": (4096, 4096),
+    "4096x6144": (4096, 6144),
+    "4096x8192": (4096, 8192),
+}
+STANDARD_VIDEO_FORMATS = ["mp4", "avi", "mov", "mkv"]
+LARGE_VIDEO_FORMATS = ["mp4"]
 SHAPES = [
     "square",
     "rectangle",
@@ -26,6 +33,23 @@ SHAPES = [
 FPS = 16
 SECONDS_PER_SHAPE = 1
 CRF = "32"
+
+
+def parse_resolution(value: str) -> tuple[str, tuple[int, int]]:
+    width_str, height_str = value.lower().split("x", 1)
+    width = int(width_str)
+    height = int(height_str)
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Resolution must be positive: {value}")
+    normalized = f"{width}x{height}"
+    return normalized, (width, height)
+
+
+def unique_resolution_map(items: list[tuple[str, tuple[int, int]]]) -> dict[str, tuple[int, int]]:
+    result: dict[str, tuple[int, int]] = {}
+    for key, value in items:
+        result[key] = value
+    return result
 
 
 def load_source_images(source_dir: Path) -> list[Image.Image]:
@@ -78,15 +102,78 @@ def encode_video(images: list[Image.Image], output_path: Path, width: int, heigh
             container.mux(packet)
 
 
+def resolve_resolution_map(profile: str, explicit: list[str]) -> dict[str, tuple[int, int]]:
+    items: list[tuple[str, tuple[int, int]]] = []
+    if profile == "standard":
+        items.extend(STANDARD_TARGET_RESOLUTIONS.items())
+    elif profile == "large":
+        items.extend(LARGE_TARGET_RESOLUTIONS.items())
+    else:
+        items.extend(STANDARD_TARGET_RESOLUTIONS.items())
+        items.extend(LARGE_TARGET_RESOLUTIONS.items())
+    items.extend(parse_resolution(item) for item in explicit)
+    return unique_resolution_map(items)
+
+
+def resolve_formats(profile: str, explicit: list[str]) -> list[str]:
+    if explicit:
+        formats = [item.lower() for item in explicit]
+    elif profile == "large":
+        formats = list(LARGE_VIDEO_FORMATS)
+    elif profile == "standard":
+        formats = list(STANDARD_VIDEO_FORMATS)
+    else:
+        formats = list(dict.fromkeys(STANDARD_VIDEO_FORMATS + LARGE_VIDEO_FORMATS))
+    unsupported = [item for item in formats if item not in STANDARD_VIDEO_FORMATS]
+    if unsupported:
+        raise ValueError(f"Unsupported video format(s): {', '.join(unsupported)}")
+    return formats
+
+
 def main() -> None:
-    project_root = Path.cwd()
-    source_dir = project_root / "pics" / SOURCE_RESOLUTION / "jpg"
-    output_root = project_root / "video"
+    project_root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(description="Generate synthetic shape videos for evaluator capability tests.")
+    parser.add_argument(
+        "--resolution-profile",
+        choices=("standard", "large", "all"),
+        default="all",
+        help="Which built-in resolution set to generate.",
+    )
+    parser.add_argument(
+        "--resolutions",
+        nargs="*",
+        default=[],
+        help="Optional extra resolutions in WIDTHxHEIGHT format.",
+    )
+    parser.add_argument(
+        "--formats",
+        nargs="*",
+        default=[],
+        help="Optional subset of video container formats to generate.",
+    )
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=project_root / "pics",
+        help="Input image root. The script reads JPG frames from <source-root>/720x1280/jpg.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=project_root / "video",
+        help="Output root for generated videos.",
+    )
+    args = parser.parse_args()
+
+    source_dir = args.source_root.resolve() / SOURCE_RESOLUTION / "jpg"
+    output_root = args.output_root.resolve()
     images = load_source_images(source_dir)
+    resolutions = resolve_resolution_map(args.resolution_profile, args.resolutions)
+    formats = resolve_formats(args.resolution_profile, args.formats)
 
     generated_count = 0
-    for resolution_name, (width, height) in TARGET_RESOLUTIONS.items():
-        for extension in VIDEO_FORMATS:
+    for resolution_name, (width, height) in resolutions.items():
+        for extension in formats:
             output_path = output_root / resolution_name / extension / f"shapes.{extension}"
             encode_video(images, output_path, width, height)
             generated_count += 1

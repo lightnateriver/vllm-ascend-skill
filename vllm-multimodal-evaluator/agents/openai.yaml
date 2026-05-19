@@ -1,4 +1,4 @@
 interface:
   display_name: "vLLM Multimodal Evaluator"
-  short_description: "Run multimodal capability checks across three media modes"
-  default_prompt: "Use $vllm-multimodal-evaluator to generate deterministic image and video fixtures, start a local Qwen3.5 multimodal service if needed, and run the multimodal capability checklist across file_url, base64, and http with a PASS or FAIL report."
+  short_description: "Run multimodal capability checks across three transport modes"
+  default_prompt: "Use $vllm-multimodal-evaluator to generate deterministic image and video fixtures, verify the service across local_path, base64, and http, and keep Phase 1 ingestion, Phase 2 semantics, large-image smoke, and function-calling results separated with clear failure attribution."

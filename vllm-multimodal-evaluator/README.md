@@ -1,151 +1,190 @@
 # vllm-multimodal-evaluator
 
-面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估 skill，目标是帮助使用者快速构造规则化测试数据，并用可复用 checklist 验证图片、视频、多图输入和图文穿插能力是否正常。
+面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力验证 skill。
 
-采用**两阶段测试**策略：
-- **Phase 1 — 格式读取**：验证服务能否正常读取各格式媒体文件（HTTP 200 + 无错误）
-- **Phase 2 — 语义理解**：验证模型是否正确理解媒体内容（关键词匹配）
+这个 skill 的定位很明确：
 
-这两个阶段覆盖三种媒体传输模式：`file://`、Base64 和 HTTP。
+- 负责“服务是否支持某类多模态输入”和“模型是否具备基础能力”的能力验证
+- 负责生成规则化图片和视频测试数据
+- 负责把失败分成链路问题、输出格式问题、模型能力问题
+- 不负责 `L0`、`L0.5`、`MME`、`MMBench` 这类精度回归
 
-这个 skill 可以视作 `vllm-ascend-use` 的配套子 skill：
+精度回归继续交给 `vllm-multimodal-precision-testing`。
 
-- `vllm-ascend-use` 负责通用部署、benchmark 和输入一致性验证
-- `vllm-multimodal-evaluator` 负责测试数据生成和多模态能力支持矩阵验证
+## 这个 skill 解决什么问题
 
-## 适用场景
+当用户说“这个模型能不能吃图片、视频、多图、图文穿插、HTTP URL、本地文件路径、大图、function calling”，优先应该用这个 skill。
 
-这个 skill 适合下面几类任务：
+它更像一个“能力支持矩阵”和“链路体检工具”，目的不是算 benchmark 分数，而是回答下面这些问题：
 
-- 需要生成简单、可控、可重复的本地图像测试数据
-- 需要把 JPG 图片进一步生成低体积、多格式视频测试数据
-- 需要启动 `Qwen3.5-4B` 并允许服务读取本地媒体目录
-- 需要验证图片格式是否支持 `JPG`、`PNG`、`WebP`、`BMP`、`TIFF`
-- 需要验证图片通过本地 `file://`、`Base64` 和 `HTTP` 三种请求是否正常
-- 需要验证多图输入、多图顺序理解是否正常
-- 需要验证文本和多图在消息内容中穿插排列时是否正常
-- 需要验证视频格式和视频分辨率是否正常
-- 需要区分"格式读取失败"和"模型理解错了"这两种不同的失败类型
-- 需要产出机器可读和人可读的 `PASS` / `FAIL` 能力报告，报告头部包含服务配置信息
+- 服务能不能读取图片和视频
+- `local_path`、`base64`、`http` 三种输入方式是否都能工作
+- 图片、多图、图文穿插、视频语义理解是否基本正常
+- 大图输入是否至少能做 smoke 级验证
+- function calling 链路是否正常
+- 某个失败到底是媒体链路错、抽取协议错，还是模型真的不会
 
-## 能力概览
+## 职责边界
 
-本 skill 当前覆盖六个方向：
+### `vllm-multimodal-evaluator` 负责
 
-1. **测试数据生成**
-   生成蓝色几何形状、绿色背景的图片数据，并按固定目录结构保存。
-2. **视频测试数据生成**
-   基于本地 JPG 测试图片生成低体积、多格式、多分辨率视频。
-3. **多模态服务部署**
-   提供一个通用的 vLLM 启动脚本，适用于 NVIDIA GPU 和 Ascend NPU，默认开启所有功能。
-4. **格式读取测试**
-   自动验证各格式媒体文件能否被服务正常读取，不校验语义内容。
-5. **能力 checklist 执行**
-   自动发起图片、视频、多图和图文穿插请求，支持 `file://` / Base64 / HTTP 三种传输模式，并输出 Markdown 与 JSON 报告。
-6. **Function Calling 能力测试**
-   使用预定义的15个测试用例，验证模型的函数名匹配、必选参数完整性、并行调用和多轮对话上下文保持能力。
+| 能力方向 | 默认是否开启 | 目的 |
+| --- | :---: | --- |
+| 规则化图片数据生成 | 是 | 生成稳定的单图、多图、大图测试素材 |
+| 规则化视频数据生成 | 是 | 生成标准视频和大尺寸 MP4 视频素材 |
+| Phase 1 格式读取检查 | 是 | 先判断媒体是否能被服务正确读取 |
+| Phase 2 语义理解检查 | 是 | 再判断模型是否正确理解媒体内容 |
+| 三种输入模式能力矩阵 | 是 | 同时验证 `local_path/base64/http` |
+| 大图 smoke suite | 是 | 默认验证 `4096x4096`、`4096x6144`、`4096x8192` |
+| Function Calling 能力检查 | 是 | 默认纳入标准 capability run |
 
-## 默认测试策略
+### `vllm-multimodal-precision-testing` 负责
 
-- 所有格式读取测试使用 `max_completion_tokens=16`（仅用于确认读取成功）。
-- 所有语义理解测试使用 `max_completion_tokens=512`。
-- Markdown 报告会记录每个 case 的完整 `/v1/chat/completions` 请求 Payload，包含文本输入、媒体 URL 或 Base64 数据、`model`、`temperature`、`stream` 和 `max_completion_tokens`。
-- Markdown 报告会记录每个 case 的完整模型输出。
-- JSON 报告会以结构化字段保存同样的完整请求输入和完整模型输出，便于后续程序化分析。
-- 报告头部包含服务配置表，显示 dtype、chunked prefill、async scheduling、prefix caching、function calling 等启动参数。
+- `L0`
+- `L0.5`
+- `MME`
+- `MMBench_DEV_EN`
+- 三种输入模式下的精度回归
+- runner 自检和标准复测编排
 
-## 判责边界
+## 两阶段设计
 
-这个 skill 的价值不只是跑出 `PASS/FAIL`，而是把问题拆成不同层级：
+这个 skill 采用两阶段测试策略：
 
-- `Phase 1 ingestion FAIL` 优先按 `Engineering Error` 候选处理。
-- `Phase 2 semantic FAIL` 且 ingestion 已通过时，优先按 `Model Capability Limitation` 候选处理。
-- 输出没有稳定落到要求短格式时，应单列为 `Output Format / Protocol Issue`，不要直接算成视觉能力失败。
+- `Phase 1 - 格式读取`
+  目标是证明服务真的读到了媒体，而不是把“媒体都没读到”误记成模型不懂。
+- `Phase 2 - 语义理解`
+  目标是证明媒体已可达的前提下，模型是否正确理解图像或视频内容。
 
-如果视频或 HTTP case 后续被证明是测试链路、静态服务或 timeout 策略问题，并且修复后 rerun 通过，那么历史失败不应继续计入模型错误。
+这两个阶段分开后，失败可以更稳定地归因：
 
-## 目录结构
+- `Phase 1 FAIL` 优先归为链路、路径、权限、静态服务、格式支持问题
+- `Phase 2 FAIL` 且对应 ingestion 已通过时，优先归为模型能力问题
+- 模型有输出但不按要求收敛到短答案、固定格式时，归为输出格式或协议问题
+
+## 统一输入口径
+
+对外统一只使用三种 transport 名称：
+
+- `local_path`
+- `base64`
+- `http`
+
+其中 `local_path` 的底层实现仍然是 `file://` URL，所以报告中会同时保留：
+
+- `transport_mode=local_path`
+- `transport_impl=file_url`
+
+这样对用户口径统一，对工程排查也保留足够细节。
+
+## 默认测试内容
+
+标准 capability run 默认覆盖下面这些测试项。
+
+### Phase 1
+
+| 测试项 | local_path | base64 | http | 目的 |
+| --- | :---: | :---: | :---: | --- |
+| 图片格式读取 | ✅ | ✅ | ✅ | 验证 jpg/png/webp/bmp/tiff 是否都能读 |
+| 图片分辨率读取 | ✅ | - | ✅ | 验证不同分辨率图片读入 |
+| 视频格式读取 | ✅ | - | ✅ | 验证 mp4/avi/mov/mkv 是否可读 |
+| 视频分辨率读取 | ✅ | - | ✅ | 验证不同分辨率视频读入 |
+
+### Phase 2
+
+| 测试项 | local_path | base64 | http | 目的 |
+| --- | :---: | :---: | :---: | --- |
+| 图片单图语义理解 | ✅ | ✅ | ✅ | 验证单图识别与颜色/背景理解 |
+| 图片分辨率语义理解 | ✅ | - | ✅ | 验证高低分辨率图片理解一致性 |
+| 多图输入理解 | ✅ | ✅ | ✅ | 验证多图顺序和图形列表输出 |
+| 图文穿插输入理解 | ✅ | - | - | 验证 interleave 内容顺序理解 |
+| 视频语义理解 | ✅ | - | ✅ | 验证视频基本理解 |
+| 视频分辨率语义理解 | ✅ | - | ✅ | 验证不同视频分辨率理解 |
+| 视频细节与顺序理解 | ✅ | - | ✅ | 验证 first/last/order 类问题 |
+
+### 默认开启的扩展 suite
+
+| Suite | 默认 | 目的 |
+| --- | :---: | --- |
+| `large_image_smoke` | 开 | 验证 4K 级图片读取和基础语义 smoke |
+| `phase2_function_calling_standard` | 开 | 验证 function calling 能力和输出链路 |
+
+大图 smoke 默认覆盖：
+
+- `4096x4096`
+- `4096x6144`
+- `4096x8192`
+
+## 数据集与素材
+
+### 图片目录
 
 ```text
-.
-├── README.md
-├── SKILL.md
-├── agents/
-│   └── openai.yaml
-├── references/
-│   ├── dataset-layout.md
-│   └── checklist-design.md
-└── scripts/
-    ├── generate_shape_dataset.py
-    ├── generate_shape_videos.py
-    ├── start_qwen35_4b_vllm.sh          # 通用启动脚本
-    ├── run_multimodal_capability_tests.py  # 两阶段测试主脚本
-    ├── function_calling_test.json
-    └── fc_test.py
+pics/<resolution>/<format>/<shape>.<ext>
 ```
 
-## 推荐使用方式
+### 视频目录
 
-### 1. 先确认目标
+```text
+video/<resolution>/<format>/shapes.<ext>
+```
 
-先确认当前任务是"多模态能力评估"，而不是：
+### 内置图像分辨率
 
-- 通用 Ascend 服务部署
-- 大规模 benchmark
-- 前 `LLM` 输入一致性验证
-- API server 热点分析
+- `standard`
+  - `256x512`
+  - `720x1280`
+  - `1920x1080`
+- `large`
+  - `4096x4096`
+  - `4096x6144`
+  - `4096x8192`
 
-如果任务更偏这些方向，优先改用：
+### 内置视频分辨率
 
-- `../vllm-ascend-use/`
-- `../vllm-ascend-api-server-profiler/`
+- `standard`
+  - `720x1280`
+  - `1080x1920`
+- `large`
+  - `4096x4096`
+  - `4096x6144`
+  - `4096x8192`
 
-### 2. 生成测试数据
+大尺寸视频默认只生成 `mp4`，避免素材成本过高。
 
-生成图片：
+## 常用命令
+
+### 生成图片
 
 ```bash
 python scripts/generate_shape_dataset.py
 ```
 
-生成视频：
+仅生成标准分辨率：
+
+```bash
+python scripts/generate_shape_dataset.py --resolution-profile standard
+```
+
+仅生成大图：
+
+```bash
+python scripts/generate_shape_dataset.py --resolution-profile large
+```
+
+### 生成视频
 
 ```bash
 python scripts/generate_shape_videos.py
 ```
 
-默认输出结构：
-
-```text
-pics/<resolution>/<format>/<shape>.<ext>
-video/<resolution>/<format>/shapes.<ext>
-```
-
-### 3. 启动服务
-
-如果服务还没起来，可以用通用的 vLLM 启动脚本（适用于 NVIDIA GPU 和 Ascend NPU）：
+仅生成大尺寸 MP4 视频：
 
 ```bash
-MODEL_PATH=/path/to/Qwen3.5-4B \
-ALLOWED_LOCAL_MEDIA_PATH=/path/to/project \
-PORT=8000 \
-bash scripts/start_qwen35_4b_vllm.sh
+python scripts/generate_shape_videos.py --resolution-profile large
 ```
 
-这样服务就能读取 `pics/` 和 `video/` 下的本地媒体。
-所有功能默认开启：chunked prefill / async scheduling / prefix caching / function calling。
-
-如需测试 HTTP 模式，额外启动静态文件服务器：
-
-```bash
-python3 -m http.server 9000 --directory /path/to/project
-```
-
-建议在正式跑 capability 前，先直接 `curl` 一个图片 URL 和一个视频 URL，确认静态服务真的能把测试素材暴露出来。
-
-### 4. 跑 checklist
-
-标准用法：
+### 标准 capability run
 
 ```bash
 python scripts/run_multimodal_capability_tests.py \
@@ -155,85 +194,24 @@ python scripts/run_multimodal_capability_tests.py \
   --auto-start-media-server
 ```
 
-标准能力测试默认应覆盖 `file_url` / `base64` / `http` 三种输入模式；如果没有显式提供 `--media-base-url`，就只能覆盖前两种，不能算完整能力验收。
-
-完整用法（含 HTTP 模式和所有服务配置标志）：
+关闭大图 smoke：
 
 ```bash
 python scripts/run_multimodal_capability_tests.py \
   --base-url http://127.0.0.1:8000/v1 \
   --model /path/to/Qwen3.5-4B \
-  --dtype bfloat16 \
-  --chunked-prefill True \
-  --async-scheduling True \
-  --prefix-caching True \
-  --function-calling True \
   --media-base-url http://127.0.0.1:9000 \
-  --auto-start-media-server
+  --no-large-image-smoke
 ```
 
-默认会输出：
-
-- `results/qwen35_multimodal_capability_report.md`
-- `results/qwen35_multimodal_capability_report.json`
-
-生成的 Markdown 报告包含五类信息：
-
-1. **服务配置表** — 显示 dtype、chunked prefill、async scheduling、prefix caching、function calling 等启动参数
-2. **媒体格式读取测试** — Phase 1 结果，验证各格式能否被服务正常读取
-3. **语义理解测试** — Phase 2 结果，按能力项分类的详细结果
-4. **语义理解汇总** — 所有语义测试的汇总矩阵
-5. **失败 Case 明细** — 失败的 case 及其 HTTP 状态和输出摘要
-6. **完整 Case 输入与输出** — 包含完整请求 Payload 和完整模型回答
-
-JSON 报告建议优先消费结构化摘要字段，用于后续统一汇总：
-
-- `counts_by_status`
-- `counts_by_test_type`
-- `engineering_errors`
-- `model_limitations`
-- `non_pass_cases`
-
-如果后续还要继续跑 precision，推荐把 capability 结果目录作为同一轮“标准复测”的前半段产物保留，并与 precision 一起归档到共享 run 目录中。对应的标准做法见 `vllm-multimodal-precision-testing/scripts/run_standard_retest.py`。
-
-### 5. 配置参数说明
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--dtype` | `bfloat16` | 模型精度 |
-| `--chunked-prefill` | `True` | 是否启用 chunked prefill |
-| `--async-scheduling` | `True` | 是否启用异步调度 |
-| `--prefix-caching` | `True` | 是否启用 prefix caching |
-| `--function-calling` | `True` | 是否启用 function calling |
-| `--gpu-memory-utilization` | `0.7` | GPU 显存利用率 |
-| `--enforce-eager` | `True` | 是否启用 eager mode |
-| `--media-base-url` | `None` | HTTP 模式的媒体访问地址，如 `http://127.0.0.1:9000` |
-
-## checklist 覆盖范围
-
-标准能力测试要求以下每项能力尽量同时按 file_url / base64 / http 三种模式测试：
-
-| 能力项 | file_url | base64 | http |
-|--------|:--------:|:------:|:----:|
-| 图片单图格式（JPG/PNG/WebP/BMP/TIFF） | ✅ | ✅ | ✅ |
-| 图片分辨率（256x512 / 720x1280 / 1920x1080） | ✅ | - | ✅ |
-| 多图输入理解（7张图） | ✅ | ✅ | ✅ |
-| 文本和多图穿插排列 | ✅ | - | - |
-| 视频格式（MP4/AVI/MOV/MKV） | ✅ | - | ✅ |
-| 视频分辨率（720x1280 / 1080x1920） | ✅ | - | ✅ |
-| 视频首尾形状识别 + 全序列理解 | ✅ | - | ✅ |
-
-## Function Calling 测试
-
-### 前提条件
-
-启动 vLLM 服务时需要开启 function calling 支持：
+只测部分 transport：
 
 ```bash
---enable-auto-tool-choice --tool-call-parser qwen3_xml
+python scripts/run_multimodal_capability_tests.py \
+  --transport-modes local_path http
 ```
 
-### 执行测试
+### 单独跑 function calling
 
 ```bash
 python scripts/fc_test.py \
@@ -241,84 +219,68 @@ python scripts/fc_test.py \
   --model /path/to/Qwen3.5-4B
 ```
 
-`fc_test.py` 支持 `--endpoint`、`--model`、`--test-file` 和 `--json` 参数。
+## 关键 CLI 参数
 
-如果需要把结果接入自动化流水线，推荐使用 `--json`：
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--transport-modes` | `local_path base64 http` | 标准能力测试的 transport 矩阵 |
+| `--include-large-image-smoke` | `True` | 默认启用大图 smoke suite |
+| `--no-large-image-smoke` | `False` | 显式关闭大图 smoke |
+| `--large-image-resolutions` | `4096x4096 4096x6144 4096x8192` | 大图 smoke 使用的分辨率列表 |
+| `--include-function-calling` | `True` | 默认将 FC 测试并入 capability run |
+| `--no-function-calling` | `False` | 显式关闭 FC suite |
+| `--function-calling-test-file` | `scripts/function_calling_test.json` | 覆盖默认 FC 用例文件 |
+| `--media-base-url` | `http://127.0.0.1:9000` | `http` 模式媒体静态服务地址 |
+| `--auto-start-media-server` | `True` | 默认自动拉起本地静态媒体服务 |
 
-```bash
-python scripts/fc_test.py \
-  --endpoint http://127.0.0.1:8000/v1/chat/completions \
-  --model /path/to/Qwen3.5-4B \
-  --json
-```
+## 输出与报告
 
-在 `--json` 模式下：
+JSON 和 Markdown 报告会明确体现：
 
-- `stdout` 只输出机器可解析的 JSON 汇总
-- 每个 case 的 `PASS` / `FAIL` 行和汇总提示会输出到 `stderr`
+- 服务配置
+- transport modes
+- enabled optional suites
+- included test items
+- counts by suite
+- counts by media scale
+- counts by transport mode
+- 每个 case 的请求内容
+- 每个 case 的模型输出
+- 每个失败项的归因
 
-这样既保留了人读日志，也避免脚本消费者被混合输出破坏解析。
+关键字段：
 
-### 测试用例
+| 字段 | 说明 |
+| --- | --- |
+| `suite_name` | 当前 case 属于哪个 suite |
+| `media_scale` | `standard` 或 `large` |
+| `transport_mode` | `local_path/base64/http` |
+| `transport_impl` | `file_url/data_url/http_url` |
+| `enabled_optional_suites` | 这次 run 打开的可选 suite |
+| `included_test_items` | 报告中按 suite/category/test_type 聚合的覆盖清单 |
+| `counts_by_suite` | 按 suite 聚合的 PASS/FAIL/BLOCKED/SKIP |
+| `counts_by_media_scale` | 按标准/大尺寸聚合 |
+| `counts_by_transport_mode` | 按三种输入方式聚合 |
+| `failure_class` | 失败归类 |
+| `root_cause_note` | 失败原因说明 |
 
-`scripts/function_calling_test.json` 包含15个标准测试用例，覆盖：
+## 失败归因规则
 
-| 场景 | 用例数 | 说明 |
-|------|:------:|------|
-| 基础功能 | 4 | 单函数调用，必选参数完整 |
-| 多工具并行 | 2 | 一次请求中并行调用多个函数 |
-| 参数缺失 | 2 | 必选参数不完整时的模型行为 |
-| 多轮对话 | 2 | 上下文关联的连续函数调用 |
-| 无需调用 | 2 | 闲聊场景不触发函数调用 |
-| 模糊参数 | 1 | 参数含歧义时的模型行为 |
-| 非法参数 | 1 | 参数值非法时的模型行为 |
-| 长文本干扰 | 1 | 无关长文本中提取函数调用 |
+- `Phase 1 FAIL`
+  优先看 `--allowed-local-media-path`、HTTP 静态服务、路径、权限、媒体格式支持。
+- `Phase 2 FAIL`
+  且对应 ingestion 已通过时，优先看模型能力。
+- `HTTP` 失败
+  不应直接记成模型错，要先排查静态媒体服务和 URL 构造。
+- `explanation-heavy` 输出
+  如果模型答了很多解释但没有按要求收敛到短格式，应标成 `Output Format / Protocol Issue`。
 
-测试脚本采用宽松评估策略：
+## 建议使用顺序
 
-- **核心校验**：函数名匹配 + 必选参数是否存在（不做字符串值精确匹配）
-- **参数缺失场景**：小模型倾向于填默认值而非追问，视为 PASS
-- **非法参数场景**：小模型可能仍执行调用，视为 PASS
-- **无需调用场景**：模型若仍调用函数则校验函数名和参数
+推荐顺序是：
 
-### 结果解读
+1. 先用 `vllm-ascend-use` 把服务拉起来并确认 `/v1/models`、`/v1/chat/completions` 正常
+2. 再用 `vllm-multimodal-evaluator` 验证能力支持矩阵
+3. 如果能力链路正常，再进入 `vllm-multimodal-precision-testing`
 
-输出格式示例如下：
-
-```
-PASS | FC-001 [基础功能] 调用 get_weather({'city': '北京', 'date': '2025-01-01'})
-PASS | FC-005 [多工具并行] 并行调用：['get_weather', 'calculate']
-...
-=== 汇总: 15/15 通过 ===
-```
-
-## 结果解读建议
-
-当某个 case 失败时，先区分是格式读取问题还是语义理解问题（两阶段测试已自动分离）：
-
-**格式读取失败**（Phase 1 FAIL）：
-- `--allowed-local-media-path` 是否正确设置
-- 静态文件服务器是否正在运行（HTTP 模式）
-- 文件权限和路径是否正确
-- vLLM 版本是否支持该格式
-
-**语义理解失败**（Phase 2 FAIL）：
-- 请求是否构造错误（Phase 1 已读通，这一步不太可能）
-- 输出是否在 `512` token 上限下仍然被截断
-- 模型是否真的理解错了
-
-如果某个 case 的回答明显被截断，需要结合完整 Markdown 报告里的请求 Payload、完整输出和 JSON 里的原始结果判断问题来源，不要直接把它归类为媒体格式不支持。
-
-如果 capability rerun 已经证明某个历史问题属于测试链路修复项，那么最终验收报告里应把它归为已解决工程问题，而不是继续累计为模型错误。
-
-## 相关文件
-
-- Skill 定义：`SKILL.md`
-- 数据集规范：`references/dataset-layout.md`
-- checklist 设计：`references/checklist-design.md`
-- 图片生成：`scripts/generate_shape_dataset.py`
-- 视频生成：`scripts/generate_shape_videos.py`
-- 服务启动：`scripts/start_qwen35_4b_vllm.sh`
-- 能力测试（两阶段）：`scripts/run_multimodal_capability_tests.py`
-- Function Calling 测试用例：`scripts/function_calling_test.json`
-- Function Calling 测试脚本：`scripts/fc_test.py`
+这样可以把“服务不通”和“模型能力差”分开。

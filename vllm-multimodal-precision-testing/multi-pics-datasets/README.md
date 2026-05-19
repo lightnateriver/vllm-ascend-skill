@@ -1,50 +1,71 @@
 # Multi Pics Dataset
 
-这个数据集服务于 `L0.5` 多图精度测试，不是 capability 支持矩阵测试。
+This dataset is the deterministic `1` to `40` image fixture set used by `L0.5`.
 
-建议按下面口径解读结果：
+It is part of the precision regression flow, not the capability matrix flow.
 
-- `wrong` 更接近模型能力边界，例如多图检索、顺序敏感或短答案不稳定。
-- `unknown` 不直接等于视觉失败，也可能是输出格式没有收敛到要求答案。
-- `timeout`、`request_error`、`http_xxx` 更接近服务或链路问题，应优先按工程问题排查。
+## What it measures
 
-建议统一保留：
+- single-request multi-image retrieval
+- target image index binding
+- order sensitivity under higher image counts
+- short-answer stability under heavier visual context
+
+## What it does not mean
+
+This dataset is not a direct media-ingestion benchmark.
+
+If a case fails, interpret it like this:
+
+- `wrong` usually points to a model capability limitation
+- `unknown` may be model capability, but it may also be output-format or extraction drift
+- `timeout`, `request_error`, and `http_xxx` usually point to engineering or serving issues first
+
+## Data layout
+
+```text
+cases/<case_id>/
+```
+
+Each case contains:
+
+- `question.md`
+- `answer.md`
+- `answer.json`
+- the ordered image files for that case
+
+## Dataset rules
+
+- Case `01` contains exactly `1` image and asks a strict `YES`/`NO` question.
+- Cases `02` to `40` contain exactly `N` images and ask for exactly one target image index.
+- Shape and color combinations are unique within a case.
+- Repeated shapes, if present, always use different colors.
+
+## Rebuild
+
+```bash
+python3 multi-pics-datasets/generate_dataset.py
+```
+
+## Result files
+
+Standard runs keep:
 
 - `summary.json`
 - `summary.csv`
-- 每个 case 的逐题 JSON
+- per-case JSON files
 
-并在最终汇总时明确区分：
+These files should preserve:
 
 - `engineering_errors`
 - `model_limitations`
 - `output_format_or_protocol_issues`
 
-This directory contains a deterministic `1` to `40` image precision dataset for multimodal regression checks.
+## How to read failures
 
-Structure:
-
-- `generate_dataset.py`: rebuilds the full dataset with a fixed seed
-- `cases/`: generated case directories from `01` to `40`
-
-Dataset rules:
-
-- Case `01` contains exactly `1` image.
-- Cases `02` to `40` contain exactly `N` images for case `N`.
-- Case `01` asks a `YES` or `NO` question.
-- Cases `02` to `40` ask for one target image index and require exactly one number.
-- Shape and color combinations are unique inside each case.
-- If a shape repeats in one case, its color is different.
-
-Each case directory includes:
-
-- `question.md`
-- `answer.md`
-- `answer.json`
-- ordered `*.jpg` images
-
-Use:
-
-```bash
-python3 multi-pics-datasets/generate_dataset.py
-```
+- `wrong`
+  Model answered, but the answer was wrong.
+- `unknown`
+  The answer could not be cleanly normalized. Check for explanation-heavy output or extraction instability.
+- `timeout` / `request_error`
+  First check the serving path and transport path.

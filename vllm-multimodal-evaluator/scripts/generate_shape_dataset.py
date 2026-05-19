@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -9,10 +10,15 @@ BACKGROUND_COLOR = (0, 255, 0)
 SHAPE_FILL_COLOR = (0, 0, 255)
 SHAPE_OUTLINE_COLOR = (0, 0, 180)
 
-RESOLUTIONS = [
+STANDARD_RESOLUTIONS = [
     (1920, 1080),
     (720, 1280),
     (256, 512),
+]
+LARGE_RESOLUTIONS = [
+    (4096, 4096),
+    (4096, 6144),
+    (4096, 8192),
 ]
 
 FORMATS = {
@@ -32,6 +38,25 @@ SHAPES = [
     "cylinder",
     "cube",
 ]
+
+
+def parse_resolution(value: str) -> tuple[int, int]:
+    width_str, height_str = value.lower().split("x", 1)
+    width = int(width_str)
+    height = int(height_str)
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Resolution must be positive: {value}")
+    return width, height
+
+
+def unique_resolutions(resolutions: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    seen: set[tuple[int, int]] = set()
+    ordered: list[tuple[int, int]] = []
+    for resolution in resolutions:
+        if resolution not in seen:
+            seen.add(resolution)
+            ordered.append(resolution)
+    return ordered
 
 
 def draw_square(draw: ImageDraw.ImageDraw, width: int, height: int) -> None:
@@ -171,14 +196,67 @@ def render_shape(shape_name: str, width: int, height: int) -> Image.Image:
     return image
 
 
+def resolve_resolutions(profile: str, explicit: list[str]) -> list[tuple[int, int]]:
+    selected: list[tuple[int, int]] = []
+    if profile == "standard":
+        selected.extend(STANDARD_RESOLUTIONS)
+    elif profile == "large":
+        selected.extend(LARGE_RESOLUTIONS)
+    else:
+        selected.extend(STANDARD_RESOLUTIONS)
+        selected.extend(LARGE_RESOLUTIONS)
+    if explicit:
+        selected.extend(parse_resolution(item) for item in explicit)
+    return unique_resolutions(selected)
+
+
+def resolve_formats(explicit: list[str]) -> list[str]:
+    if not explicit:
+        return list(FORMATS)
+    formats = [item.lower() for item in explicit]
+    unsupported = [item for item in formats if item not in FORMATS]
+    if unsupported:
+        raise ValueError(f"Unsupported image format(s): {', '.join(unsupported)}")
+    return formats
+
+
 def main() -> None:
-    project_root = Path.cwd()
-    output_root = project_root / "pics"
+    project_root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(description="Generate synthetic shape image fixtures for evaluator capability tests.")
+    parser.add_argument(
+        "--resolution-profile",
+        choices=("standard", "large", "all"),
+        default="all",
+        help="Which built-in resolution set to generate.",
+    )
+    parser.add_argument(
+        "--resolutions",
+        nargs="*",
+        default=[],
+        help="Optional extra resolutions in WIDTHxHEIGHT format.",
+    )
+    parser.add_argument(
+        "--formats",
+        nargs="*",
+        default=[],
+        help="Optional subset of image formats to generate. Default: all supported formats.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=project_root / "pics",
+        help="Output root for generated images.",
+    )
+    args = parser.parse_args()
+
+    resolutions = resolve_resolutions(args.resolution_profile, args.resolutions)
+    formats = resolve_formats(args.formats)
+    output_root = args.output_root.resolve()
 
     generated_count = 0
-    for width, height in RESOLUTIONS:
+    for width, height in resolutions:
         resolution_dir = output_root / f"{width}x{height}"
-        for extension in FORMATS:
+        for extension in formats:
             format_dir = resolution_dir / extension
             for shape_name in SHAPES:
                 image = render_shape(shape_name, width, height)

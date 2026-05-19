@@ -2,14 +2,29 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import functools
 import json
 import subprocess
 import sys
+import threading
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
 
 
 @dataclass
@@ -44,6 +59,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tolerance", type=float, default=0.1)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
+
+
+def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return 200 <= response.status < 400
+    except Exception:
+        return False
+
+
+@contextlib.contextmanager
+def maybe_start_media_server(media_base_url: str, media_root: str):
+    parsed = urllib.parse.urlparse(media_base_url)
+    host = parsed.hostname or ""
+    port = parsed.port or 80
+    if parsed.scheme != "http" or host not in {"127.0.0.1", "localhost"}:
+        yield
+        return
+
+    if is_url_reachable(media_base_url, timeout=2.0):
+        yield
+        return
+
+    root = Path(media_root).expanduser().resolve()
+    handler = functools.partial(QuietHTTPRequestHandler, directory=str(root))
+    httpd = ReusableThreadingHTTPServer((host, port), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def run_l0(mode: str, args: argparse.Namespace) -> dict:
@@ -118,7 +166,8 @@ def compare_modes(results: list[dict], tolerance: float) -> dict:
 
 def main() -> int:
     args = parse_args()
-    results = [run_l0(mode, args) for mode in ("base64", "local_path", "http")]
+    with maybe_start_media_server(args.media_base_url, args.media_root):
+        results = [run_l0(mode, args) for mode in ("base64", "local_path", "http")]
     comparison = compare_modes(results, args.tolerance)
     payload = {
         "results": results,

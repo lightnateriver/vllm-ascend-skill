@@ -191,22 +191,50 @@ def main():
     results = [None] * len(rows)
 
     def run_one(i, row):
-        prediction = client.infer(row["question"], row["image_ref"])
-        extracted = extract_yes_no(prediction)
-        score = extracted == row["answer"]
-        return i, {
-            "index": row["index"],
-            "category": row["category"],
-            "image_path": row["image_path"],
-            "media_mode": args.media_mode,
-            "image_ref": row["image_ref"],
-            "local_image_path": row["local_image_path"],
-            "question": row["question"],
-            "answer": row["answer"],
-            "prediction": prediction,
-            "extracted": extracted,
-            "score": score,
-        }
+        try:
+            prediction = client.infer(row["question"], row["image_ref"])
+            extracted = extract_yes_no(prediction)
+            score = extracted == row["answer"]
+            if extracted == "Unknown":
+                failure_class = "output_format_or_extraction_issue"
+                root_cause_note = "Model returned text, but it did not collapse to a stable yes/no answer."
+            elif score:
+                failure_class = "none"
+                root_cause_note = "Prediction matched the expected yes/no answer."
+            else:
+                failure_class = "model_capability_gap"
+                root_cause_note = "Request completed and was decoded, but the extracted yes/no answer was wrong."
+            return i, {
+                "index": row["index"],
+                "category": row["category"],
+                "image_path": row["image_path"],
+                "media_mode": args.media_mode,
+                "image_ref": row["image_ref"],
+                "local_image_path": row["local_image_path"],
+                "question": row["question"],
+                "answer": row["answer"],
+                "prediction": prediction,
+                "extracted": extracted,
+                "score": score,
+                "failure_class": failure_class,
+                "root_cause_note": root_cause_note,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return i, {
+                "index": row["index"],
+                "category": row["category"],
+                "image_path": row["image_path"],
+                "media_mode": args.media_mode,
+                "image_ref": row["image_ref"],
+                "local_image_path": row["local_image_path"],
+                "question": row["question"],
+                "answer": row["answer"],
+                "prediction": repr(exc),
+                "extracted": "Unknown",
+                "score": False,
+                "failure_class": "pipeline_or_serving_issue",
+                "root_cause_note": "Request failed before a stable answer was obtained; treat as serving or transport issue first.",
+            }
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = [pool.submit(run_one, i, row) for i, row in enumerate(rows)]
@@ -233,6 +261,15 @@ def main():
         "media_base_url": args.media_base_url,
         "exact_acc": float(pred_df["score"].mean() * 100),
         "unknown": int((pred_df["extracted"] == "Unknown").sum()),
+        "failure_class_counts": {
+            "pipeline_or_serving_issue": int((pred_df["failure_class"] == "pipeline_or_serving_issue").sum()),
+            "model_capability_gap": int((pred_df["failure_class"] == "model_capability_gap").sum()),
+            "output_format_or_extraction_issue": int((pred_df["failure_class"] == "output_format_or_extraction_issue").sum()),
+            "none": int((pred_df["failure_class"] == "none").sum()),
+        },
+        "engineering_error_cases": pred_df.loc[pred_df["failure_class"] == "pipeline_or_serving_issue", "index"].astype(str).tolist(),
+        "model_limitation_cases": pred_df.loc[pred_df["failure_class"] == "model_capability_gap", "index"].astype(str).tolist(),
+        "format_or_protocol_issue_cases": pred_df.loc[pred_df["failure_class"] == "output_format_or_extraction_issue", "index"].astype(str).tolist(),
         "pred_path": str(pred_path),
         "score_path": str(score_path),
         "scores": score_df.iloc[0].to_dict(),

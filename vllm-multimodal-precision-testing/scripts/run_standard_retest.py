@@ -135,6 +135,7 @@ def summarize_capability(report_json):
     return {
         "counts_by_status": report_json.get("counts_by_status", {}),
         "counts_by_test_type": report_json.get("counts_by_test_type", {}),
+        "included_test_items": report_json.get("included_test_items", []),
         "engineering_errors": report_json.get("engineering_errors", []),
         "model_limitations": report_json.get("model_limitations", []),
         "non_pass_case_count": len(report_json.get("non_pass_cases", [])),
@@ -148,6 +149,7 @@ def summarize_precision(report_json):
         "overall_pass": report_json.get("overall_pass"),
         "requested_media_modes": report_json.get("requested_media_modes", []),
         "mode_comparison": report_json.get("mode_comparison", {}),
+        "global_check_summary": report_json.get("global_check_summary", {}),
         "final_verdict": report_json.get("final_verdict", {}),
     }
 
@@ -238,6 +240,31 @@ def render_summary_markdown(summary):
                 "",
             ]
         )
+        included_items = capability_summary.get("included_test_items", [])
+        if included_items:
+            lines.extend(
+                [
+                    "### Capability Test Items",
+                    "",
+                    render_table(
+                        ["Suite", "Category", "Type", "Transports", "Total", "PASS", "FAIL", "BLOCKED"],
+                        [
+                            [
+                                item.get("suite_name"),
+                                item.get("category"),
+                                item.get("test_type"),
+                                ", ".join(item.get("transport_modes", [])),
+                                item.get("total_cases"),
+                                item.get("PASS", 0),
+                                item.get("FAIL", 0),
+                                item.get("BLOCKED", 0),
+                            ]
+                            for item in included_items
+                        ],
+                    ),
+                    "",
+                ]
+            )
     precision_summary = summary.get("precision", {}).get("summary", {})
     if precision_summary:
         lines.extend(
@@ -251,6 +278,13 @@ def render_summary_markdown(summary):
                         ["requested_media_modes", ", ".join(precision_summary.get("requested_media_modes", []))],
                     ],
                 ),
+                "",
+                "### Precision Global Checks",
+                "",
+                render_table(
+                    ["Check", "Value"],
+                    [[key, json.dumps(value, ensure_ascii=False)] for key, value in precision_summary.get("global_check_summary", {}).items()],
+                ) if precision_summary.get("global_check_summary") else "No global checks recorded.",
                 "",
                 render_mode_comparison_tables(precision_summary.get("mode_comparison", {})),
             ]

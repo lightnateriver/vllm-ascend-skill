@@ -1,502 +1,176 @@
 ---
 name: vllm-multimodal-precision-testing
-description: Run layered multimodal precision regression tests for local vLLM or vllm-ascend OpenAI-compatible services, especially Qwen3.5 and Qwen3-VL style models. Use when Codex needs to run L0, L0.5, MME, and MMBench across base64, local_path, and http by default after model tuning or deployment changes.
+description: Run layered multimodal precision regression for local vLLM or vllm-ascend services. Standard runs execute L0, L0.5, MME, and MMBench across base64, local_path, and http by default, plus transport consistency and output contract self-checks.
 ---
 
 # vLLM Multimodal Precision Testing
 
-## Overview
+## What this skill is for
 
-Use this skill to run the verified multimodal regression stack against a local OpenAI-compatible service.
+Use this skill when the service is already up and you need to answer:
 
-- `L0`: fixed smoke suite for 7 images plus 3 video checks
-- `L0.5`: deterministic `1` to `40` multi-image precision dataset
-- `L1`: broader benchmark checks with `MME` and `MMBench_DEV_EN`
-- standard regression default: run all checks across `base64`, `local_path`, and local `http`
-- standard retest entrypoint: capability first, then three-mode full precision with unified artifact drop
+> Did the model or the multimodal serving path regress in precision?
 
-This skill is intended for repeatable post-tuning or post-deployment regression testing, not one-off demos.
+This is the regression layer after basic capability is already known to work.
 
-## Preconditions
+## What it covers
 
-Use this skill only when the target service is already running and reachable through a local `/v1/chat/completions` endpoint.
+This skill currently covers:
 
-Default assumptions used by the bundled scripts:
+- `L0`
+- `L0.5`
+- `MME`
+- `MMBench_DEV_EN`
+- transport consistency regression
+- output contract self-check
 
-- host: `http://127.0.0.1:8000`
-- model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
-- image dir: `assets/l0/pics/720x1280/jpg`
-- video path: `assets/l0/video/720x1280/mp4/shapes.mp4`
-- multi-pics dataset dir: `multi-pics-datasets/cases`
-- MME TSV: `/tmp/MME.tsv`
-- MMBench TSV: `/tmp/MMBench_DEV_EN.tsv`
+## Default behavior
 
-All verified requests in this skill assume:
+Standard regression defaults to:
 
-```json
-"chat_template_kwargs": {"enable_thinking": false}
-```
+- all three transport modes:
+  - `base64`
+  - `local_path`
+  - `http`
+- all major precision suites:
+  - `L0`
+  - `L0.5`
+  - `MME`
+  - `MMBench`
+- both runner-level self-checks:
+  - `transport_consistency_check.py`
+  - `output_contract_self_check.py`
 
-If this flag is missing, short-answer and benchmark outputs may become verbose and unstable, which can invalidate extraction-based scoring.
+## Test purposes
 
-When testing input-link behavior, prefer using the new shared media-mode layer in the bundled scripts:
-
-- `--media-mode base64`
-- `--media-mode local_path`
-- `--media-mode http`
-
-For `local_path`, the served model process must allow the media root via `--allowed-local-media-path`.
-For `http`, use a local static server such as `http://127.0.0.1:9000`, not a remote host.
-
-## Capability Gate Before Precision
-
-Use precision results only after the basic media path is trustworthy.
-
-- If video or HTTP media handling is unstable, first use `vllm-multimodal-evaluator` to prove ingestion and semantic capability separately.
-- Do not continue counting known evaluator pipeline problems as model errors after the capability rerun has passed.
-- Reuse the already-running service whenever possible. Avoid restarting the target service in the middle of a regression unless the user explicitly asks for it.
-
-## L0 Smoke
-
-### Goal
+### L0
 
 Catch obvious regressions in:
 
 - single-image recognition
 - multi-image order handling
-- prompt following for short constrained answers
+- short constrained answer following
 - basic video understanding
 
-### Run
+### L0.5
 
-```bash
-python3 scripts/l0_multimodal_smoke.py
-```
+Catch regressions that only appear when one request carries many images:
 
-Use JSON output when needed:
-
-```bash
-python3 scripts/l0_multimodal_smoke.py --json
-```
-
-Override defaults only when necessary:
-
-```bash
-python3 scripts/l0_multimodal_smoke.py \
-  --host http://127.0.0.1:8000 \
-  --model /path/to/model \
-  --image-dir /path/to/pics/720x1280/jpg \
-  --video-path /path/to/video/720x1280/mp4/shapes.mp4 \
-  --media-mode local_path \
-  --media-root /path/to/media/root
-```
-
-### Pass Rule
-
-- `10/10` pass means the finalized L0 suite is healthy.
-- Any failure should be treated as a real smoke regression until explained.
-
-### Root-Cause Triage for L0 Failures
-
-- `L0` failures should alert you immediately, but they still need a second-pass attribution.
-- Prefer splitting each failure into:
-  - `engineering or serving issue`
-  - `output format or extraction issue`
-  - `model capability limitation`
-- When a video case fails, check whether capability evaluation already proved the same transport path healthy before treating it as a model regression.
-
-### Finalized Cases
-
-- `img-1-single` -> `circle`
-- `img-2-second` -> `cube`
-- `img-3-order` -> `circle,cube,cylinder`
-- `img-4-shape4` -> `rectangle`
-- `img-5-circle-rhombus` -> `1,5`
-- `img-6-shape6` -> `square`
-- `img-7-last` -> `triangle`
-- `video-first` -> `square`
-- `video-last` -> `cube`
-- `video-count` -> `7`
-
-## L0.5 Multi-Pics
-
-### Goal
-
-Catch regressions that only appear when one request carries many images.
-
-- single-request multi-image retrieval
 - target index binding
-- order sensitivity under image counts from `1` to `40`
-- short constrained answering under heavier visual context
+- order sensitivity
+- 1 to 40 image scaling
+- short answer stability under heavier visual context
 
-### Bundled Dataset
+### MME
 
-This skill now bundles a deterministic multi-image dataset:
+Track broader yes/no perception and reasoning coverage, especially:
 
-- dataset root: `multi-pics-datasets/cases`
-- generator: `multi-pics-datasets/generate_dataset.py`
-- evaluator: `scripts/multi_pics_eval.py`
+- OCR
+- existence
+- count
+- position
+- translation
+- calculation
 
-Dataset rules:
+### MMBench
 
-- case `01` contains `1` image and asks a strict `YES` or `NO` question
-- cases `02` to `40` contain exactly `N` images and ask for exactly one target image index
-- shape and color combinations are unique within one case
-- a shape may repeat in one case, but repeated shapes always use different colors
+Track broader MCQ perception and reasoning coverage, including:
 
-### Run
+- localization
+- spatial relationship
+- OCR
+- structure reading
+- future prediction
 
-Full run:
+### transport_consistency
 
-```bash
-python3 scripts/multi_pics_eval.py \
-  --wait-ready \
-  --endpoint http://127.0.0.1:8000/v1/chat/completions \
-  --dataset-dir multi-pics-datasets/cases \
-  --media-mode local_path \
-  --json
-```
+Check whether `base64`, `local_path`, and `http` behave consistently on the same L0 sample set.
 
-Single case:
+This is a runner-level regression guard, not a benchmark.
 
-```bash
-python3 scripts/multi_pics_eval.py \
-  --wait-ready \
-  --case 40 \
-  --endpoint http://127.0.0.1:8000/v1/chat/completions \
-  --dataset-dir multi-pics-datasets/cases \
-  --json
-```
+### output_contract
 
-### Readiness Policy
+Check that the JSON contracts of the precision scripts remain machine-readable and stable.
 
-Do not start this evaluation only because HTTP is reachable.
+This prevents automation from breaking when a script starts mixing logs into its JSON output.
 
-The bundled evaluator supports `--wait-ready` and should be used by default. Readiness must require:
+## Transport modes
 
-1. `/v1/models` returns HTTP `200`
-2. a minimal text `/v1/chat/completions` request also returns HTTP `200`
+The three transport modes have different roles:
 
-This avoids false starts where the service is listening but still returns startup `502` responses.
+| Mode | What it means | Main use |
+| --- | --- | --- |
+| `base64` | `data:` URLs | Default compatibility path |
+| `local_path` | `file://` URLs | Validate local file access path |
+| `http` | local static media URLs | Validate URL-based media access |
 
-The same evaluator can also be used to compare transport modes without changing the scoring logic:
+`local_path` is the user-facing name. Internally, it is still implemented with a `file://` URL.
 
-- `base64` for data URI input
-- `local_path` for `file://` input
-- `http` for local URL input
+## Failure attribution
 
-### Result Interpretation
+Do not collapse every failure into “model bad”.
 
-The evaluator reports:
+Use these three categories:
 
-- `correct`
-- `wrong`
-- `unknown`
-- `timeout`
-- `accuracy`
+- `Engineering Error`
+  Service startup, HTTP request failure, media path failure, timeout, script error, static server issue.
+- `Model Capability Limitation`
+  Media was read successfully, but the answer was actually wrong.
+- `Output Format / Protocol Issue`
+  The model answered, but not in the required short form, yes/no form, or option-letter form.
 
-Artifacts are written under `multi-pics-runs/<run_name>/`:
+### Practical rule
 
-- `01.json` to `40.json`
-- `summary.json`
-- `summary.csv`
+- `L0` failure: first check transport and serving
+- `L0.5 wrong_answer`: usually model capability
+- `MME unknown`: may be output-format or extraction instability, not necessarily model incapability
+- `MMBench Z`: usually output-format or protocol drift
+- `transport_consistency` failure: usually media-serving or URL construction
 
-Each case artifact keeps:
+## Report expectations
 
-- question
-- gold answer
-- target image metadata
-- image inventory
-- raw model output
-- extracted prediction
-- final scoring status
+Reports should show:
 
-### Attribution Rule for L0.5 Outcomes
+- what was tested
+- which transports were included
+- which suites were enabled by default
+- the outcome of each suite
+- pass / fail details
+- failure attribution
 
-- `wrong_answer` is usually a model capability limitation candidate.
-- `timeout`, `request_error`, and `http_xxx` are engineering or serving issue candidates.
-- `unknown` is not automatically a visual failure; it may reflect format drift, explanation-heavy outputs, or extraction instability.
-- Keep case-level artifacts so the final report can separate true model limitations from pipeline noise.
+Important report fields:
 
-## L1 Benchmarks
+- `requested_media_modes`
+- `mode_comparison`
+- `global_checks`
+- `global_check_summary`
+- `precision_summary`
+- `engineering_errors`
+- `model_limitations`
+- `format_or_protocol_issues`
+- `final_verdict`
 
-### Goal
+## Recommended flow
 
-Use `L1` after `L0` passes. The purpose is to track broader multimodal accuracy after each tuning round.
+1. Confirm the service is up.
+2. Run `vllm-multimodal-evaluator` if the transport path or media path is uncertain.
+3. Run `run_full_regression.py` for default three-mode precision.
+4. If needed, run `run_standard_retest.py` to combine capability and precision in one artifact tree.
 
-- `MME`: broad yes/no perception plus reasoning coverage, especially OCR, existence, count, translation, and calculation
-- `MMBench_DEV_EN`: broad MCQ coverage across perception and reasoning, including localization, spatial reasoning, OCR, structure reading, and future prediction
-
-Recommended use:
-
-1. run `L0`
-2. run `MME`
-3. run `MMBench_DEV_EN`
-4. compare against the previous tuned baseline
-
-Do not use `L1` as the first signal when the service itself may be broken.
-
-### L1 Attention Points
-
-- Keep `enable_thinking=false` in benchmark requests.
-- Prefer strict output constraints:
-  `MME` should trend toward short yes/no answers.
-  `MMBench` should be forced to output only one uppercase option letter.
-- Judge by extraction, not by raw string equality to a verbose answer.
-- Keep the prompt policy stable across runs, or historical scores will not be comparable.
-- Keep model endpoint, prompt style, media mode, and concurrency stable when comparing tuning rounds.
-- `MMBench_DEV_EN` contains circular variants and image references.
-  Use the bundled script instead of ad hoc parsing.
-- A small number of extraction fallbacks such as `Unknown` or `Z` may still occur.
-  Track them as a separate metric because they often indicate prompt-following drift rather than pure vision failure.
-- Current default L1 concurrency is `16`, based on the measured local-path speedup over `8`.
-
-## One-Command Run
-
-Use the unified runner when you want the standard regression order in one command. By default it executes all requested checks across all three media transport modes:
+## Default command
 
 ```bash
-python3 scripts/run_full_regression.py \
+python scripts/run_full_regression.py \
   --media-root /mnt/sfs_turbo \
   --media-base-url http://127.0.0.1:9000 \
   --auto-start-media-server
 ```
 
-Useful overrides:
+## Summary rule
 
-```bash
-python3 scripts/run_full_regression.py \
-  --host http://127.0.0.1:8000 \
-  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
-  --mme-tsv /tmp/MME.tsv \
-  --mmbench-tsv /tmp/MMBench_DEV_EN.tsv \
-  --concurrency 16 \
-  --media-modes base64 local_path http \
-  --media-root /path/to/media/root \
-  --media-base-url http://127.0.0.1:9000 \
-  --auto-start-media-server \
-  --json
-```
+When summarizing results for a user, always say:
 
-The unified runner:
-
-1. runs `L0`, `L0.5`, `MME`, and `MMBench_DEV_EN`
-2. repeats that full stack across `base64`, `local_path`, and `http` by default
-3. prints a final JSON summary with per-mode and cross-mode comparison status
-4. auto-downloads missing `MME` and `MMBench_DEV_EN` TSV files by default
-
-If you want the full acceptance flow rather than precision-only execution, use the standard retest entrypoint:
-
-```bash
-python3 scripts/run_standard_retest.py \
-  --host http://127.0.0.1:8000 \
-  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
-  --media-root /mnt/sfs_turbo \
-  --media-base-url http://127.0.0.1:9000
-```
-
-This orchestration:
-
-1. runs the capability gate first
-2. runs the three-mode full precision stack second
-3. writes a top-level `retest_summary.json` and `retest_summary.md`
-4. keeps capability and precision artifacts under one shared retest directory
-
-Optional flags:
-
-- `--skip-l0`
-- `--skip-l05`
-- `--skip-mme`
-- `--skip-mmbench`
-- `--no-auto-download`
-- `--media-modes`
-- `--media-mode`
-- `--media-root`
-- `--media-base-url`
-- `--auto-start-media-server`
-
-Output artifacts are preserved by the underlying scripts:
-
-- `L0`
-  JSON output includes every fixed case and its returned content.
-- `L0.5`
-  `multi-pics-runs/<run_name>/summary.json` keeps the full run summary and all case details.
-  `multi-pics-runs/<run_name>/<case>.json` keeps each case question, gold answer, prediction, extracted result, and status.
-  `multi-pics-runs/<run_name>/summary.csv` keeps one scored row per case.
-- `MME`
-  `*.pred.tsv` keeps one row per question with `question`, `answer`, `prediction`, `extracted`, and `score`.
-- `MMBench`
-  `*.pred_all.tsv` keeps every raw row and variant with `question`, `answer`, `prediction`, `extracted`, and `row_hit`.
-  `*.pred.tsv` keeps the scored main rows with grouped `hit`.
-
-For `MME` and `MMBench`, the row outputs now also preserve transport metadata such as `media_mode`, `image_ref`, and `local_image_path`.
-
-The unified runner itself now also preserves:
-
-- `<run-root>/summary.json`
-- `<run-root>/summary.md`
-- `<run-root>/modes/<mode>/<step>/cmd.sh`
-- `<run-root>/modes/<mode>/<step>/stdout.txt`
-- `<run-root>/modes/<mode>/<step>/stderr.txt`
-
-## Standard Summary Outputs
-
-The final summary should explicitly separate:
-
-- per-mode `engineering_errors`
-- per-mode `model_limitations`
-- per-mode `output_format_or_protocol_issues`
-- per-mode `artifact_paths`
-- per-mode `l0`
-- per-mode `l05`
-- per-mode `mme`
-- per-mode `mmbench`
-- cross-mode `mode_comparison`
-
-## L1 MME
-
-### Dataset Objective
-
-`MME` is the first L1 benchmark in this skill because it is easy to interpret and broad enough to catch regressions in:
-
-- OCR
-- counting
-- existence
-- position
-- posters and scene understanding
-- commonsense reasoning
-- numerical calculation
-- text translation
-
-### Preparation
-
-Download the official TSV if missing:
-
-```bash
-curl -k -L --fail --max-time 120 -o /tmp/MME.tsv \
-  https://opencompass.openxlab.space/utils/VLMEval/MME.tsv
-```
-
-### Run
-
-```bash
-python3 scripts/mme_eval_local.py
-```
-
-Useful overrides:
-
-```bash
-python3 scripts/mme_eval_local.py \
-  --tsv /tmp/MME.tsv \
-  --endpoint http://127.0.0.1:8000/v1/chat/completions \
-  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
-  --concurrency 8
-```
-
-### Result Interpretation
-
-The bundled script outputs:
-
-- `exact_acc`
-- `unknown`
-- official-style `MME` aggregate scores
-- per-category scores
-
-Pay special attention to:
-
-- `unknown` count
-- `numerical_calculation`
-- `commonsense_reasoning`
-- `OCR`
-
-If `unknown` rises while raw model quality seems similar, first suspect prompt-following drift.
-
-## L1 MMBench
-
-### Dataset Objective
-
-`MMBench_DEV_EN` is the second L1 benchmark in this skill because it provides broader MCQ coverage for:
-
-- coarse and fine-grained perception
-- attribute and relation reasoning
-- logic reasoning
-- OCR and structure reading
-- localization and spatial reasoning
-- future prediction
-
-### Preparation
-
-Download the official TSV if missing:
-
-```bash
-curl -k -L --fail --max-time 120 -o /tmp/MMBench_DEV_EN.tsv \
-  https://opencompass.openxlab.space/utils/benchmarks/MMBench/MMBench_DEV_EN.tsv
-```
-
-### Run
-
-```bash
-python3 scripts/mmbench_eval_local.py
-```
-
-Useful overrides:
-
-```bash
-python3 scripts/mmbench_eval_local.py \
-  --tsv /tmp/MMBench_DEV_EN.tsv \
-  --endpoint http://127.0.0.1:8000/v1/chat/completions \
-  --model /mnt/sfs_turbo/models/Qwen/Qwen3.5-4B \
-  --concurrency 8
-```
-
-### Result Interpretation
-
-The bundled script outputs:
-
-- `rows_all`
-- `rows_scored`
-- `exact_acc`
-- `z_fallback`
-- grouped accuracy summary close to `MMBench` heuristic evaluation
-
-Pay special attention to:
-
-- `LR`
-- `future_prediction`
-- `spatial_relationship`
-- `object_localization`
-- `structuralized_imagetext_understanding`
-- `z_fallback`
-
-If `z_fallback` rises, the model may still know the answer but fail to obey the "letter only" output constraint.
-
-## Regression Policy
-
-For routine tuning comparisons, treat the following as a healthy minimum process:
-
-1. `L0` must pass fully.
-2. `MME` should not show a clear drop in overall score or a spike in `unknown`.
-3. `MMBench_DEV_EN` should not show a clear drop in overall score or a spike in `z_fallback`.
-4. Investigate any category-specific regression even if the overall score looks flat.
-
-Do not compare one run that used relaxed prompting against another run that used strong constrained prompting.
-
-## Final Attribution Policy
-
-- Do not mix evaluator transport failures with model semantic failures.
-- `Unknown` and `z_fallback` should be preserved as standalone diagnostics even when the final score looks acceptable.
-- If a historical issue was fixed by repairing the evaluation pipeline, keep it as a resolved engineering note rather than an active model error.
-- Small multimodal models may legitimately hit capability ceilings on FC, multi-image indexing, and reasoning-heavy categories; document these separately from engineering defects.
-
-## Resources
-
-- `scripts/l0_multimodal_smoke.py`
-  Run the finalized image plus video L0 smoke suite.
-- `scripts/multi_pics_eval.py`
-  Run the deterministic `1` to `40` multi-image precision dataset with readiness gating and extraction-based scoring.
-- `scripts/mme_eval_local.py`
-  Run local `MME` with extraction-based scoring and official-style aggregation.
-- `scripts/mmbench_eval_local.py`
-  Run local `MMBench_DEV_EN` with letter extraction and circular-aware scoring.
-- `scripts/run_full_regression.py`
-  Run the standard `L0 -> MME -> MMBench_DEV_EN` regression chain and emit one final summary.
+- what suite passed or failed
+- what transport mode passed or failed
+- whether the issue is engineering, protocol, or model capability
+- whether `unknown` or `Z` is a real model error or an extraction issue

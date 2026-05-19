@@ -1,20 +1,19 @@
 # Dataset Layout
 
-Use this reference when creating or modifying the synthetic evaluation fixtures.
+Use this reference when creating or modifying the evaluator fixtures.
 
-## Image dataset
-
-Default image directory layout:
+## Image layout
 
 ```text
 pics/<resolution>/<format>/<shape>.<ext>
 ```
 
-Example:
+Typical examples:
 
 ```text
 pics/720x1280/jpg/rectangle.jpg
-pics/1920x1080/tiff/circle.tiff
+pics/4096x6144/jpg/circle.jpg
+pics/4096x8192/png/triangle.png
 ```
 
 Default shapes:
@@ -29,8 +28,7 @@ Default shapes:
 
 Default colors:
 
-- shape fill: blue
-- background: green
+- blue shape on green background
 
 Default image formats:
 
@@ -40,50 +38,56 @@ Default image formats:
 - `bmp`
 - `tiff`
 
-Common tested resolutions in this skill:
-
-- `256x512`
-- `720x1280`
-- `1920x1080`
-
-## Video dataset
-
-Default video directory layout:
+## Video layout
 
 ```text
 video/<resolution>/<format>/shapes.<ext>
 ```
 
-Example:
+Typical examples:
 
 ```text
 video/720x1280/mp4/shapes.mp4
 video/1080x1920/mkv/shapes.mkv
+video/4096x6144/mp4/shapes.mp4
 ```
 
 Default video properties:
 
-- source frames come from `pics/720x1280/jpg/*.jpg`
+- source frames come from the standard image set
 - one second per shape
 - `16 fps`
 - low-size encoding
 - `crf=32`
 
-Default video formats:
+## Resolution profiles
 
-- `mp4`
-- `avi`
-- `mov`
-- `mkv`
+### Image
 
-Default target resolutions:
+- `standard`
+  - `256x512`
+  - `720x1280`
+  - `1920x1080`
+- `large`
+  - `4096x4096`
+  - `4096x6144`
+  - `4096x8192`
 
-- `720x1280`
-- `1080x1920`
+### Video
+
+- `standard`
+  - `720x1280`
+  - `1080x1920`
+- `large`
+  - `4096x4096`
+  - `4096x6144`
+  - `4096x8192`
+
+Large videos default to `mp4` only to keep generation practical.
 
 ## Naming rules
 
-- Keep English shape names stable because the evaluation script depends on them.
-- Keep the shape order stable:
+- keep English shape names stable
+- keep shape order stable:
   `square, rectangle, rhombus, circle, triangle, cylinder, cube`
-- If a user deletes a large resolution to save space, update the generator config rather than leaving stale references in the workflow.
+- if a resolution is removed, update the generator and report references together

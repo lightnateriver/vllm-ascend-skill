@@ -1,88 +1,110 @@
 # Checklist Design
 
-Use this reference when adjusting the capability checklist or interpreting test results.
+Use this reference when adjusting the evaluator or explaining a run result.
 
-## Coverage matrix
+## Design goal
 
-The bundled script currently covers these categories:
+The evaluator is a capability gate, not a benchmark.
 
-1. image single-file format support through local file URLs
-2. image single-file format support through Base64 data URLs
-3. image resolution support
-4. seven-image ordering with file URLs
-5. seven-image ordering with Base64
-6. interleaved text plus image ordering
-7. video format support
-8. video resolution support
-9. video first-shape, last-shape, and ordered-sequence checks
-
-## PASS or FAIL logic
-
-Each case uses expected keyword groups. A case passes when at least one synonym from every expected group is present in the model output.
-
-Examples:
-
-- single image cases expect:
-  - shape synonym
-  - blue synonym
-  - green synonym
-- full-sequence cases expect:
-  - one synonym group per shape, in the fixed order
-
-## Output token budget
-
-The checklist uses `max_completion_tokens=512` by default for every request. This includes simple single-image cases, multi-image cases, interleaved text-plus-image cases, and video cases.
-
-Keep this default token budget unless a user explicitly asks for a different value. If a response is still truncated at 512 tokens, classify that as a prompt or generation-limit issue rather than a media-ingestion failure.
-
-## Common false negatives
-
-The most common non-capability failure is output truncation.
-
-Symptoms:
-
-- the answer clearly starts listing the correct sequence
-- the final one or two shapes are missing
-- `finish_reason` is `length`
-
-Mitigation:
-
-- constrain the prompt to return only a comma-separated list
-- keep `max_completion_tokens` at 512 by default, and only increase it when a specific run still shows `finish_reason=length` or visibly truncated output
-
-## Real capability gaps
-
-Treat a failure as a likely model capability gap only after ruling out:
-
-- local media path access problems
-- wrong MIME or URL construction
-- timeout or transport failures
-- output truncation
-
-## Reporting guidance
-
-Summaries should separate:
+Its job is to separate:
 
 - media ingestion support
-- multi-image ordering support
-- interleaved content support
-- video sequence understanding support
+- basic multimodal semantic support
+- function-calling support
+- transport-specific issues
 
-This distinction matters because a model may support a media format while still failing a harder reasoning question on top of that media.
+## Standard coverage
 
-The Markdown report should include full reproduction detail for each case:
+Standard capability runs default to all of the following:
 
-- the full `/v1/chat/completions` request payload, including text content, media references or Base64 data, and `max_completion_tokens`
-- the full model output, not a truncated preview
-- the per-case output token limit shown in summary tables
+1. `phase1_ingestion_standard`
+2. `phase2_semantic_standard`
+3. `phase1_ingestion_large_image_smoke`
+4. `phase2_semantic_large_image_smoke`
+5. `phase2_function_calling_standard`
 
-The JSON report should keep the same request payload and full output in structured fields.
-## Failure Attribution Addendum
+Standard transport coverage:
 
-Use the checklist in two layers: ingestion first, semantics second. When summarizing results for acceptance:
+- `local_path`
+- `base64`
+- `http`
 
-- classify media ingestion failures as `Engineering Error` candidates first
-- classify semantic failures after successful ingestion as `Model Capability Limitation` candidates first
-- classify explanation-heavy or unconstrained outputs that do not collapse to the required short format as `Output Format / Protocol Issue`
+## What each phase means
 
-If a historical capability failure is later fixed by repairing the evaluator pipeline, timeout handling, or static media serving, exclude that historical failure from the model error count and record it as a resolved engineering issue.
+### Phase 1
+
+Phase 1 checks whether the service can ingest the media correctly.
+
+Typical cases:
+
+- image format ingestion
+- image resolution ingestion
+- video format ingestion
+- video resolution ingestion
+
+### Phase 2
+
+Phase 2 checks whether the model understands the already-ingested media.
+
+Typical cases:
+
+- single-image semantic understanding
+- image resolution semantic understanding
+- multi-image understanding
+- interleaved text/image ordering
+- video semantic understanding
+- video order and detail understanding
+
+### Large-image smoke
+
+Large-image smoke is intentionally light:
+
+- `4096x4096`
+- `4096x6144`
+- `4096x8192`
+
+It exists to catch obvious regressions in high-resolution ingestion and simple semantic understanding.
+
+### Function calling
+
+Function calling is included by default so the evaluator can report a separate capability signal for tool-use related output behavior.
+
+## Transport policy
+
+The evaluator should report transport results using the user-facing mode names:
+
+- `local_path`
+- `base64`
+- `http`
+
+Internally, preserve the URL implementation detail when relevant:
+
+- `file_url`
+- `data_url`
+- `http_url`
+
+## PASS and FAIL
+
+Use the phase split for attribution:
+
+- `Phase 1 FAIL` first suggests a serving, path, permission, MIME, or static-file issue.
+- `Phase 2 FAIL` after successful ingestion first suggests a model capability issue.
+- `unknown` or explanation-heavy output first suggests output protocol or extraction instability.
+
+## Reporting
+
+Reports should always include:
+
+- service config
+- selected transport modes
+- enabled optional suites
+- included test items
+- counts by suite
+- counts by media scale
+- counts by transport mode
+- `failure_class`
+- `root_cause_note`
+
+## Practical rule
+
+If a failure was fixed by repairing evaluator transport logic, static media serving, or dataset wiring, do not keep counting that historical failure as a model defect in later reports.
