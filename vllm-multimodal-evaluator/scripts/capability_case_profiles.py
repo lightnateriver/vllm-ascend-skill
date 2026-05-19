@@ -89,6 +89,7 @@ MULTI_VIDEO_SEQUENCE = (
     "triangle",
     "cube",
 )
+PRIMARY_LOCAL_PATH_MODE = ("local_path",)
 
 
 @dataclass
@@ -129,6 +130,13 @@ def normalize_transport_modes(
         if value not in normalized:
             normalized.append(value)
     return normalized
+
+
+def primary_transport_modes(modes: Iterable[str]) -> list[str]:
+    normalized = list(modes)
+    if "local_path" in normalized:
+        return ["local_path"]
+    return normalized[:1]
 
 
 def mime_type_for(path: Path, media_type: str) -> str:
@@ -239,14 +247,16 @@ def build_standard_ingestion_cases(
     project_root: Path,
     media_base_url: str | None,
     transport_modes: Iterable[str],
+    full_transport_matrix: bool = False,
 ) -> list[TestCase]:
     modes = normalize_transport_modes(transport_modes, media_base_url)
+    default_modes = modes if full_transport_matrix else primary_transport_modes(modes)
     pics = project_root / "pics"
     videos = project_root / "video"
     suite_name = "phase1_ingestion_standard"
     cases: list[TestCase] = []
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         if transport_mode in {"local_path", "base64", "http"}:
             for extension in IMAGE_FORMATS:
                 shape_name = "rectangle" if transport_mode != "base64" else "triangle"
@@ -271,7 +281,7 @@ def build_standard_ingestion_cases(
                     )
                 )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for resolution in STANDARD_IMAGE_RESOLUTIONS:
             path = pics / resolution / "jpg" / "circle.jpg"
             cases.append(
@@ -294,7 +304,7 @@ def build_standard_ingestion_cases(
                 )
             )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for extension in VIDEO_FORMATS:
             path = videos / "720x1280" / extension / f"shapes.{extension}"
             cases.append(
@@ -317,7 +327,7 @@ def build_standard_ingestion_cases(
                 )
             )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for resolution in STANDARD_VIDEO_RESOLUTIONS:
             path = videos / resolution / "mp4" / "shapes.mp4"
             cases.append(
@@ -347,21 +357,24 @@ def build_standard_semantic_cases(
     project_root: Path,
     media_base_url: str | None,
     transport_modes: Iterable[str],
+    full_transport_matrix: bool = False,
 ) -> list[TestCase]:
     modes = normalize_transport_modes(transport_modes, media_base_url)
+    default_modes = modes if full_transport_matrix else primary_transport_modes(modes)
+    triple_modes = modes
     pics = project_root / "pics"
     videos = project_root / "video"
     suite_name = "phase2_semantic_standard"
     cases: list[TestCase] = []
 
-    for transport_mode in modes:
+    for transport_mode in triple_modes:
         for extension in IMAGE_FORMATS:
             shape_name = "rectangle" if transport_mode != "base64" else "triangle"
             path = pics / "720x1280" / extension / f"{shape_name}.{extension}"
             cases.append(
                 _case(
                     case_id=f"IMG-{_transport_code(transport_mode)}-{extension.upper()}",
-                    category="图片单图格式支持",
+                    category="图片单图语义理解",
                     suite_name=suite_name,
                     media_scale="standard",
                     media_type="image",
@@ -379,13 +392,13 @@ def build_standard_semantic_cases(
                 )
             )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for resolution in STANDARD_IMAGE_RESOLUTIONS:
             path = pics / resolution / "jpg" / "circle.jpg"
             cases.append(
                 _case(
                     case_id=f"IMG-RES-{_transport_code(transport_mode)}-{resolution}",
-                    category="图片分辨率支持",
+                    category="图片分辨率语义理解",
                     suite_name=suite_name,
                     media_scale="standard",
                     media_type="image",
@@ -404,7 +417,7 @@ def build_standard_semantic_cases(
             )
 
     multi_paths = [pics / "720x1280" / "jpg" / f"{shape}.jpg" for shape in SHAPE_ORDER]
-    for transport_mode in modes:
+    for transport_mode in triple_modes:
         cases.append(
             _case(
                 case_id=f"IMG-MULTI-7-{_transport_code(transport_mode)}",
@@ -430,14 +443,14 @@ def build_standard_semantic_cases(
             )
         )
 
-    for transport_mode in modes:
+    for transport_mode in triple_modes:
         first = pics / "720x1280" / "jpg" / "square.jpg"
         second = pics / "720x1280" / "jpg" / "circle.jpg"
         third = pics / "720x1280" / "jpg" / "triangle.jpg"
         cases.append(
             _case(
                 case_id=f"IMG-INTERLEAVE-2-{_transport_code(transport_mode)}",
-                category="文本和多图穿插排列",
+                category="图文穿插输入理解",
                 suite_name=suite_name,
                 media_scale="standard",
                 media_type="image",
@@ -461,7 +474,7 @@ def build_standard_semantic_cases(
         cases.append(
             _case(
                 case_id=f"IMG-INTERLEAVE-3-{_transport_code(transport_mode)}",
-                category="文本和多图穿插排列",
+                category="图文穿插输入理解",
                 suite_name=suite_name,
                 media_scale="standard",
                 media_type="image",
@@ -484,13 +497,13 @@ def build_standard_semantic_cases(
             )
         )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for extension in VIDEO_FORMATS:
             path = videos / "720x1280" / extension / f"shapes.{extension}"
             cases.append(
                 _case(
                     case_id=f"VID-{_transport_code(transport_mode)}-{extension.upper()}",
-                    category="视频格式支持",
+                    category="视频语义理解",
                     suite_name=suite_name,
                     media_scale="standard",
                     media_type="video",
@@ -509,13 +522,13 @@ def build_standard_semantic_cases(
                 )
             )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for resolution in STANDARD_VIDEO_RESOLUTIONS:
             path = videos / resolution / "mp4" / "shapes.mp4"
             cases.append(
                 _case(
                     case_id=f"VID-RES-{_transport_code(transport_mode)}-{resolution}",
-                    category="视频分辨率支持",
+                    category="视频分辨率语义理解",
                     suite_name=suite_name,
                     media_scale="standard",
                     media_type="video",
@@ -534,7 +547,7 @@ def build_standard_semantic_cases(
                 )
             )
 
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         mp4_video = videos / "720x1280" / "mp4" / "shapes.mp4"
         cases.extend(
             [
@@ -597,7 +610,7 @@ def build_standard_semantic_cases(
         )
 
     multi_video_suite_name = "phase2_semantic_multi_video_standard"
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for count in range(1, len(MULTI_VIDEO_SEQUENCE) + 1):
             shape_sequence = list(MULTI_VIDEO_SEQUENCE[:count])
             video_paths = [videos / "720x1280" / "mp4" / f"{shape}.mp4" for shape in shape_sequence]
@@ -634,12 +647,14 @@ def build_large_image_ingestion_cases(
     media_base_url: str | None,
     transport_modes: Iterable[str],
     resolutions: Iterable[str],
+    full_transport_matrix: bool = False,
 ) -> list[TestCase]:
     modes = normalize_transport_modes(transport_modes, media_base_url)
+    default_modes = modes if full_transport_matrix else primary_transport_modes(modes)
     pics = project_root / "pics"
     suite_name = "phase1_ingestion_large_image_smoke"
     cases: list[TestCase] = []
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for resolution in resolutions:
             path = pics / resolution / "jpg" / "square.jpg"
             cases.append(
@@ -669,12 +684,14 @@ def build_large_image_semantic_cases(
     media_base_url: str | None,
     transport_modes: Iterable[str],
     resolutions: Iterable[str],
+    full_transport_matrix: bool = False,
 ) -> list[TestCase]:
     modes = normalize_transport_modes(transport_modes, media_base_url)
+    default_modes = modes if full_transport_matrix else primary_transport_modes(modes)
     pics = project_root / "pics"
     suite_name = "phase2_semantic_large_image_smoke"
     cases: list[TestCase] = []
-    for transport_mode in modes:
+    for transport_mode in default_modes:
         for resolution in resolutions:
             path = pics / resolution / "jpg" / "square.jpg"
             cases.append(
@@ -706,10 +723,21 @@ def build_capability_cases(
     transport_modes: Iterable[str],
     include_large_image_smoke: bool,
     large_image_resolutions: Iterable[str],
+    full_transport_matrix: bool = False,
 ) -> tuple[list[TestCase], list[TestCase], list[str]]:
     normalized_modes = normalize_transport_modes(transport_modes, media_base_url)
-    ingestion_cases = build_standard_ingestion_cases(project_root, media_base_url, normalized_modes)
-    semantic_cases = build_standard_semantic_cases(project_root, media_base_url, normalized_modes)
+    ingestion_cases = build_standard_ingestion_cases(
+        project_root,
+        media_base_url,
+        normalized_modes,
+        full_transport_matrix=full_transport_matrix,
+    )
+    semantic_cases = build_standard_semantic_cases(
+        project_root,
+        media_base_url,
+        normalized_modes,
+        full_transport_matrix=full_transport_matrix,
+    )
     enabled_optional_suites: list[str] = []
     if include_large_image_smoke:
         enabled_optional_suites.append("large_image_smoke")
@@ -719,6 +747,7 @@ def build_capability_cases(
                 media_base_url,
                 normalized_modes,
                 large_image_resolutions,
+                full_transport_matrix=full_transport_matrix,
             )
         )
         semantic_cases.extend(
@@ -727,6 +756,7 @@ def build_capability_cases(
                 media_base_url,
                 normalized_modes,
                 large_image_resolutions,
+                full_transport_matrix=full_transport_matrix,
             )
         )
     return ingestion_cases, semantic_cases, enabled_optional_suites

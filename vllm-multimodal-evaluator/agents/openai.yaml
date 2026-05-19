@@ -1,4 +1,4 @@
 interface:
   display_name: "vLLM Multimodal Evaluator"
-  short_description: "Run multimodal capability checks across three transport modes"
-  default_prompt: "Use $vllm-multimodal-evaluator to generate deterministic image and video fixtures, verify every capability item across local_path, base64, and http, include 1~10 multi-video understanding plus large-image smoke and function-calling checks, and keep Phase 1 ingestion, Phase 2 semantics, and clear failure attribution separated."
+  short_description: "Run multimodal capability checks with selective multi-transport coverage"
+  default_prompt: "Use $vllm-multimodal-evaluator to generate deterministic image and video fixtures, verify Phase 1 ingestion and Phase 2 semantics with the default selective transport matrix, keep local_path/base64/http enabled by default for single-image, multi-image, and interleaved image understanding, expand to full transport coverage only when explicitly requested, and keep large-image smoke, 1~10 multi-video understanding, function-calling checks, and clear failure attribution separated."

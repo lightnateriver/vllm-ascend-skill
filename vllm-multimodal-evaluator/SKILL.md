@@ -1,6 +1,6 @@
 ---
 name: vllm-multimodal-evaluator
-description: Build deterministic multimodal fixtures and run two-phase capability checks (format ingestion + semantic understanding) against local vLLM or vllm-ascend services. Standard runs cover local_path, base64, and http together and default to large-image smoke plus function-calling checks.
+description: Build deterministic multimodal fixtures and run two-phase capability checks (format ingestion + semantic understanding) against local vLLM or vllm-ascend services. Standard runs default to a selective three-transport matrix for key Phase 2 image understanding items, with other evaluator items on local_path unless full transport coverage is explicitly requested.
 ---
 
 # vLLM Multimodal Evaluator
@@ -68,7 +68,8 @@ Reports keep both:
 
 Standard capability runs default to:
 
-- all three transport modes
+- selective three-transport coverage for key Phase 2 image understanding items
+- `local_path` coverage for the remaining evaluator items
 - standard image and video ingestion suites
 - standard image and video semantic suites
 - 1 to 10 multi-video semantic suites
@@ -90,9 +91,23 @@ Standard capability runs default to:
 
 | Transport | On | Notes |
 | --- | :---: | --- |
-| `local_path` | Yes | Requires `--allowed-local-media-path` on the served model |
-| `base64` | Yes | No extra server-side file access required |
-| `http` | Yes | Requires local static media server |
+| `local_path` | Yes | Default for all evaluator items; requires `--allowed-local-media-path` on the served model |
+| `base64` | Yes | Enabled by default only for selected Phase 2 image understanding items |
+| `http` | Yes | Enabled by default only for selected Phase 2 image understanding items; requires local static media server |
+
+By default, only these Phase 2 items use `local_path`, `base64`, and `http` together:
+
+- single-image semantic understanding
+- multi-image understanding
+- interleaved text/image ordering
+
+Other evaluator items default to `local_path` only.
+
+If the user explicitly asks for full transport coverage on every evaluator item, run with:
+
+```bash
+python scripts/run_multimodal_capability_tests.py --full-transport-matrix
+```
 
 ## Supported test content
 
@@ -152,6 +167,7 @@ Capability reports should include at least:
 
 - service configuration
 - selected transport modes
+- whether full transport matrix was enabled
 - enabled optional suites
 - included test items
 - counts by suite

@@ -541,6 +541,7 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any], su
         ("prefix-caching", "开启" if service_config.get("prefix_caching", False) else "关闭"),
         ("function calling serve", "开启" if service_config.get("function_calling", False) else "关闭"),
         ("transport modes", ", ".join(preflight.get("transport_modes", [])) or "未知"),
+        ("full transport matrix", "开启" if preflight.get("full_transport_matrix") else "关闭"),
         ("enabled suites", ", ".join(preflight.get("requested_suite_names", [])) or "未知"),
         ("include function calling suite", "开启" if preflight.get("include_function_calling") else "关闭"),
     ]
@@ -583,6 +584,8 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any], su
         [
             "",
             "### 测试内容",
+            "",
+            "默认矩阵口径：仅 `图片单图语义理解`、`多图输入理解`、`图文穿插输入理解` 默认覆盖 `local_path/base64/http`；其他 evaluator 项默认只测 `local_path`。如需所有项目都覆盖三种输入方式，请显式开启 full transport matrix。",
             "",
             "| Suite | 测试项 | 类型 | Scale | 传输模式 | Total | PASS | FAIL | BLOCKED | SKIP |",
             "|---|---|---|---|---|---:|---:|---:|---:|---:|",
@@ -851,6 +854,11 @@ def main() -> None:
         help="Transport modes to test. Supported: local_path base64 http",
     )
     parser.add_argument(
+        "--full-transport-matrix",
+        action="store_true",
+        help="Expand every evaluator item to all requested transport modes. By default, only selected Phase 2 image understanding items use the full matrix.",
+    )
+    parser.add_argument(
         "--include-large-image-smoke",
         dest="include_large_image_smoke",
         action="store_true",
@@ -954,6 +962,7 @@ def main() -> None:
         transport_modes=args.transport_modes,
         include_large_image_smoke=args.include_large_image_smoke,
         large_image_resolutions=args.large_image_resolutions,
+        full_transport_matrix=args.full_transport_matrix,
     )
     function_calling_suite_names = [FC_SUITE_NAME] if args.include_function_calling else []
     all_suite_names = sorted({case.suite_name for case in ingestion_cases + semantic_cases} | set(function_calling_suite_names))
@@ -994,6 +1003,7 @@ def main() -> None:
         "models_response": models_json if models_json is not None else models_raw,
         "local_media_present": (project_root / "pics").exists() and (project_root / "video").exists(),
         "transport_modes": list(args.transport_modes),
+        "full_transport_matrix": bool(args.full_transport_matrix),
         "enabled_optional_suites": enabled_optional_suites,
         "requested_suite_names": requested_suites,
         "include_function_calling": run_function_calling,
@@ -1009,6 +1019,7 @@ def main() -> None:
         },
     }
 
+    run_started_at = time.perf_counter()
     should_auto_start_media_server = args.auto_start_media_server and not args.dry_run
     with maybe_start_media_server(args.media_base_url, project_root, should_auto_start_media_server):
         if args.dry_run:
@@ -1127,6 +1138,7 @@ def main() -> None:
                 }
             )
 
+    total_runtime_seconds = round(time.perf_counter() - run_started_at, 3)
     summary = {
         "counts_by_status": summary_counts,
         "counts_by_test_type": test_type_counts,
@@ -1134,6 +1146,7 @@ def main() -> None:
         "counts_by_media_scale": summarize_by(results, "media_scale"),
         "counts_by_transport_mode": summarize_by(results, "transport_mode"),
         "included_test_items": summarize_included_test_items(results),
+        "total_runtime_seconds": total_runtime_seconds,
         "engineering_errors": sorted(engineering_errors),
         "model_limitations": sorted(model_limitations),
         "non_pass_cases": non_pass_cases,
@@ -1156,6 +1169,7 @@ def main() -> None:
     counts = {key: summary_counts.get(key, 0) for key in sorted(summary_counts)}
     print(f"Wrote {report_json}")
     print(f"Wrote {report_md}")
+    print(f"Total runtime seconds: {total_runtime_seconds}")
     print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
 
 

@@ -34,7 +34,7 @@
 | 规则化视频数据生成 | 是 | 生成标准视频和大尺寸 MP4 视频素材 |
 | Phase 1 格式读取检查 | 是 | 先判断媒体是否能被服务正确读取 |
 | Phase 2 语义理解检查 | 是 | 再判断模型是否正确理解媒体内容 |
-| 三种输入模式能力矩阵 | 是 | 同时验证 `local_path/base64/http` |
+| 三种输入模式能力矩阵 | 是 | 默认只对指定图片语义项做三模式，其余可按需扩展到全量三模式 |
 | 多视频理解 `1~10` | 是 | 验证单请求内多视频顺序理解阈值 |
 | 大图 smoke suite | 是 | 默认验证 `4096x4096`、`4096x6144`、`4096x8192` |
 | Function Calling 能力检查 | 是 | 默认纳入标准 capability run |
@@ -82,27 +82,33 @@
 
 标准 capability run 默认覆盖下面这些测试项。
 
+默认 transport 口径：
+
+- `图片单图语义理解`、`多图输入理解`、`图文穿插输入理解` 默认覆盖 `local_path` / `base64` / `http`
+- 其余 evaluator 测试项默认只测 `local_path`
+- 如需把所有项目都扩展到三种输入方式，请显式开启 `--full-transport-matrix`
+
 ### Phase 1
 
 | 测试项 | local_path | base64 | http | 目的 |
 | --- | :---: | :---: | :---: | --- |
-| 图片格式读取 | ✅ | ✅ | ✅ | 验证 jpg/png/webp/bmp/tiff 是否都能读 |
-| 图片分辨率读取 | ✅ | ✅ | ✅ | 验证不同分辨率图片读入 |
-| 视频格式读取 | ✅ | ✅ | ✅ | 验证 mp4/avi/mov/mkv 是否可读 |
-| 视频分辨率读取 | ✅ | ✅ | ✅ | 验证不同分辨率视频读入 |
+| 图片格式读取 | ✅ | - | - | 验证 jpg/png/webp/bmp/tiff 是否都能读 |
+| 图片分辨率读取 | ✅ | - | - | 验证不同分辨率图片读入 |
+| 视频格式读取 | ✅ | - | - | 验证 mp4/avi/mov/mkv 是否可读 |
+| 视频分辨率读取 | ✅ | - | - | 验证不同分辨率视频读入 |
 
 ### Phase 2
 
 | 测试项 | local_path | base64 | http | 目的 |
 | --- | :---: | :---: | :---: | --- |
 | 图片单图语义理解 | ✅ | ✅ | ✅ | 验证单图识别与颜色/背景理解 |
-| 图片分辨率语义理解 | ✅ | ✅ | ✅ | 验证高低分辨率图片理解一致性 |
+| 图片分辨率语义理解 | ✅ | - | - | 验证高低分辨率图片理解一致性 |
 | 多图输入理解 | ✅ | ✅ | ✅ | 验证多图顺序和图形列表输出 |
 | 图文穿插输入理解 | ✅ | ✅ | ✅ | 验证 interleave 内容顺序理解 |
-| 视频语义理解 | ✅ | ✅ | ✅ | 验证视频基本理解 |
-| 视频分辨率语义理解 | ✅ | ✅ | ✅ | 验证不同视频分辨率理解 |
-| 视频细节与顺序理解 | ✅ | ✅ | ✅ | 验证 first/last/order 类问题 |
-| 多视频输入理解 `1~10` | ✅ | ✅ | ✅ | 验证单请求内 1 到 10 个视频的顺序理解 |
+| 视频语义理解 | ✅ | - | - | 验证视频基本理解 |
+| 视频分辨率语义理解 | ✅ | - | - | 验证不同视频分辨率理解 |
+| 视频细节与顺序理解 | ✅ | - | - | 验证 first/last/order 类问题 |
+| 多视频输入理解 `1~10` | ✅ | - | - | 验证单请求内 1 到 10 个视频的顺序理解 |
 
 ### 默认开启的扩展 suite
 
@@ -225,6 +231,13 @@ python scripts/run_multimodal_capability_tests.py \
   --transport-modes local_path http
 ```
 
+将所有 evaluator 项扩展到三种 transport：
+
+```bash
+python scripts/run_multimodal_capability_tests.py \
+  --full-transport-matrix
+```
+
 ### 单独跑 function calling
 
 ```bash
@@ -237,7 +250,8 @@ python scripts/fc_test.py \
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--transport-modes` | `local_path base64 http` | 标准能力测试的 transport 矩阵 |
+| `--transport-modes` | `local_path base64 http` | 可用 transport 列表；默认精简矩阵会只对指定图片语义项使用全列表 |
+| `--full-transport-matrix` | `False` | 显式将所有 evaluator 项扩展到所有请求的 transport |
 | `--include-large-image-smoke` | `True` | 默认启用大图 smoke suite |
 | `--no-large-image-smoke` | `False` | 显式关闭大图 smoke |
 | `--large-image-resolutions` | `4096x4096 4096x6144 4096x8192` | 大图 smoke 使用的分辨率列表 |
@@ -253,6 +267,7 @@ JSON 和 Markdown 报告会明确体现：
 
 - 服务配置
 - transport modes
+- full transport matrix 是否开启
 - enabled optional suites
 - included test items
 - counts by suite

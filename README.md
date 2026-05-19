@@ -9,7 +9,7 @@
 - `vllm-ascend-use`
   面向 stock `vllm-ascend` 的通用实战工作流，覆盖架构理解、服务部署、性能测试和前 `LLM` 输入一致性验证。
 - `vllm-multimodal-evaluator`
-  面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖规则化图片和视频测试数据生成，以及两阶段测试：格式读取和语义理解。当前标准能力项默认全量覆盖 `local_path` / `base64` / `http` 三种输入模式，并包含 `1~10` 多视频理解、大图 smoke 与 function calling 检查。
+  面向 stock `vllm` 或 `vllm-ascend` OpenAI 兼容服务的多模态能力评估工作流，覆盖规则化图片和视频测试数据生成，以及两阶段测试：格式读取和语义理解。当前默认矩阵仅对 `Phase 2` 的 `图片单图语义理解`、`多图输入理解`、`图文穿插输入理解` 覆盖 `local_path` / `base64` / `http` 三种输入模式，其他 evaluator 项默认只测 `local_path`；如有需要，也支持显式扩展为全项目三模式，并包含 `1~10` 多视频理解、大图 smoke 与 function calling 检查。
 - `vllm-multimodal-precision-testing`
   面向本地 `vLLM` 或 `vllm-ascend` OpenAI 兼容服务的多模态精度回归工作流，覆盖 `L0`、`L0.5`、`MME`、`MMBench_DEV_EN`，标准流程默认对 `local_path`、`base64`、`http` 三种输入方式做全量测试与汇总。
 - `vllm-ascend-api-server-profiler`
