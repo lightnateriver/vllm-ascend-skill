@@ -19,6 +19,7 @@ It is especially useful for:
 - checking whether `local_path`, `base64`, and `http` behave consistently
 - separating pipeline issues from model capability issues
 - validating large-image smoke support
+- validating 1 to 10 multi-video understanding
 - validating function calling support
 
 ## What it does not cover
@@ -70,6 +71,7 @@ Standard capability runs default to:
 - all three transport modes
 - standard image and video ingestion suites
 - standard image and video semantic suites
+- 1 to 10 multi-video semantic suites
 - large-image smoke
 - function calling
 
@@ -79,6 +81,7 @@ Standard capability runs default to:
 | --- | :---: | --- |
 | `phase1_ingestion_standard` | On | Verify standard image/video format ingestion |
 | `phase2_semantic_standard` | On | Verify standard image/video semantic understanding |
+| `phase2_semantic_multi_video_standard` | On | Verify 1 to 10 multi-video semantic understanding |
 | `phase1_ingestion_large_image_smoke` | On | Verify 4K-class image ingestion |
 | `phase2_semantic_large_image_smoke` | On | Verify 4K-class image semantics |
 | `phase2_function_calling_standard` | On | Verify function calling ability and output chain |
@@ -108,6 +111,7 @@ Standard capability runs default to:
 - interleaved text/image ordering
 - video semantic understanding
 - video order and detail understanding
+- multi-video order understanding
 
 ### Extended smoke
 
@@ -116,6 +120,8 @@ Default large-image smoke resolves to:
 - `4096x4096`
 - `4096x6144`
 - `4096x8192`
+
+Multi-video standard runs use single-shape clips stored under `video/720x1280/mp4/<shape>.mp4`.
 
 ## Run flow
 
@@ -153,6 +159,15 @@ Capability reports should include at least:
 - counts by transport mode
 - `failure_class`
 - `root_cause_note`
+
+## Current validated behavior
+
+For the current repository version:
+
+- standard ingestion coverage passes across `local_path`, `base64`, and `http`
+- standard semantic coverage is broadly healthy across all three transport modes
+- multi-video understanding is transport-consistent but model-limited and unstable
+- large-image smoke ingestion passes, while large-image semantic smoke remains a model-capability concern
 
 ## Default command
 

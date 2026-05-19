@@ -33,6 +33,8 @@ SHAPES = [
 FPS = 16
 SECONDS_PER_SHAPE = 1
 CRF = "32"
+SINGLE_SHAPE_CLIP_RESOLUTION = "720x1280"
+SINGLE_SHAPE_CLIP_FORMATS = ["mp4"]
 
 
 def parse_resolution(value: str) -> tuple[str, tuple[int, int]]:
@@ -52,8 +54,8 @@ def unique_resolution_map(items: list[tuple[str, tuple[int, int]]]) -> dict[str,
     return result
 
 
-def load_source_images(source_dir: Path) -> list[Image.Image]:
-    images: list[Image.Image] = []
+def load_source_images(source_dir: Path) -> dict[str, Image.Image]:
+    images: dict[str, Image.Image] = {}
     missing_paths: list[Path] = []
 
     for shape in SHAPES:
@@ -61,7 +63,7 @@ def load_source_images(source_dir: Path) -> list[Image.Image]:
         if not image_path.exists():
             missing_paths.append(image_path)
             continue
-        images.append(Image.open(image_path).convert("RGB"))
+        images[shape] = Image.open(image_path).convert("RGB")
 
     if missing_paths:
         missing = "\n".join(str(path) for path in missing_paths)
@@ -167,7 +169,7 @@ def main() -> None:
 
     source_dir = args.source_root.resolve() / SOURCE_RESOLUTION / "jpg"
     output_root = args.output_root.resolve()
-    images = load_source_images(source_dir)
+    images_by_shape = load_source_images(source_dir)
     resolutions = resolve_resolution_map(args.resolution_profile, args.resolutions)
     formats = resolve_formats(args.resolution_profile, args.formats)
 
@@ -175,8 +177,14 @@ def main() -> None:
     for resolution_name, (width, height) in resolutions.items():
         for extension in formats:
             output_path = output_root / resolution_name / extension / f"shapes.{extension}"
-            encode_video(images, output_path, width, height)
+            encode_video([images_by_shape[shape] for shape in SHAPES], output_path, width, height)
             generated_count += 1
+
+            if resolution_name == SINGLE_SHAPE_CLIP_RESOLUTION and extension in SINGLE_SHAPE_CLIP_FORMATS:
+                for shape in SHAPES:
+                    clip_path = output_root / resolution_name / extension / f"{shape}.{extension}"
+                    encode_video([images_by_shape[shape]], clip_path, width, height)
+                    generated_count += 1
 
     print(f"Generated {generated_count} videos under {output_root}")
 

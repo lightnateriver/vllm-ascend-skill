@@ -44,10 +44,17 @@ Default image formats:
 video/<resolution>/<format>/shapes.<ext>
 ```
 
+Multi-video understanding clips are stored as:
+
+```text
+video/720x1280/mp4/<shape>.mp4
+```
+
 Typical examples:
 
 ```text
 video/720x1280/mp4/shapes.mp4
+video/720x1280/mp4/square.mp4
 video/1080x1920/mkv/shapes.mkv
 video/4096x6144/mp4/shapes.mp4
 ```
@@ -84,6 +91,7 @@ Default video properties:
   - `4096x8192`
 
 Large videos default to `mp4` only to keep generation practical.
+Single-shape clips for multi-video understanding default to `720x1280/mp4` only.
 
 ## Naming rules
 

@@ -71,11 +71,24 @@ PROMPT_DESCRIBE_IMAGE = "请描述这张图片中的图形、图形颜色和背�
 PROMPT_MULTI_IMAGE = "请按图片输入顺序列出每张图中的形状名称。只输出英文逗号分隔列表，不要解释，不要编号，不要分析。"
 PROMPT_INTERLEAVE_TWO = "请分别回答第一张图和第二张图是什么形状。只输出英文逗号分隔列表，不要解释。"
 PROMPT_INTERLEAVE_THREE = "请按出现顺序回答三张图的形状。只输出英文逗号分隔列表，不要解释，不要编号，不要分析。"
+PROMPT_MULTI_VIDEO = "请按输入顺序回答每个视频中第一个出现的形状。只输出英文逗号分隔列表，不要解释，不要编号，不要分析。"
 PROMPT_VIDEO_ORDER = "请按出现顺序列出视频中的所有形状。只输出英文逗号分隔列表，不要解释，不要编号，不要分析。"
 PROMPT_VIDEO_FIRST = "视频中第一个出现的形状是什么？只回答形状名称。"
 PROMPT_VIDEO_LAST = "视频中最后一个出现的形状是什么？只回答形状名称。"
 INGEST_PROMPT = "describe"
 INGEST_MAX_TOKENS = 16
+MULTI_VIDEO_SEQUENCE = (
+    "square",
+    "rectangle",
+    "rhombus",
+    "circle",
+    "triangle",
+    "cylinder",
+    "cube",
+    "square",
+    "triangle",
+    "cube",
+)
 
 
 @dataclass
@@ -258,7 +271,7 @@ def build_standard_ingestion_cases(
                     )
                 )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         for resolution in STANDARD_IMAGE_RESOLUTIONS:
             path = pics / resolution / "jpg" / "circle.jpg"
             cases.append(
@@ -281,7 +294,7 @@ def build_standard_ingestion_cases(
                 )
             )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         for extension in VIDEO_FORMATS:
             path = videos / "720x1280" / extension / f"shapes.{extension}"
             cases.append(
@@ -304,7 +317,7 @@ def build_standard_ingestion_cases(
                 )
             )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         for resolution in STANDARD_VIDEO_RESOLUTIONS:
             path = videos / resolution / "mp4" / "shapes.mp4"
             cases.append(
@@ -366,7 +379,7 @@ def build_standard_semantic_cases(
                 )
             )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         for resolution in STANDARD_IMAGE_RESOLUTIONS:
             path = pics / resolution / "jpg" / "circle.jpg"
             cases.append(
@@ -417,24 +430,24 @@ def build_standard_semantic_cases(
             )
         )
 
-    if "local_path" in modes:
+    for transport_mode in modes:
         first = pics / "720x1280" / "jpg" / "square.jpg"
         second = pics / "720x1280" / "jpg" / "circle.jpg"
         third = pics / "720x1280" / "jpg" / "triangle.jpg"
         cases.append(
             _case(
-                case_id="IMG-INTERLEAVE-2",
+                case_id=f"IMG-INTERLEAVE-2-{_transport_code(transport_mode)}",
                 category="文本和多图穿插排列",
                 suite_name=suite_name,
                 media_scale="standard",
                 media_type="image",
-                transport_mode="local_path",
+                transport_mode=transport_mode,
                 prompt=PROMPT_INTERLEAVE_TWO,
                 content=[
                     text_content("第一张图如下。"),
-                    build_media_content(first, "image", "local_path", media_base_url, project_root),
+                    build_media_content(first, "image", transport_mode, media_base_url, project_root),
                     text_content("第二张图如下。"),
-                    build_media_content(second, "image", "local_path", media_base_url, project_root),
+                    build_media_content(second, "image", transport_mode, media_base_url, project_root),
                     text_content(PROMPT_INTERLEAVE_TWO),
                 ],
                 expected_groups=[SHAPE_SYNONYMS["square"], SHAPE_SYNONYMS["circle"]],
@@ -447,19 +460,19 @@ def build_standard_semantic_cases(
         )
         cases.append(
             _case(
-                case_id="IMG-INTERLEAVE-3",
+                case_id=f"IMG-INTERLEAVE-3-{_transport_code(transport_mode)}",
                 category="文本和多图穿插排列",
                 suite_name=suite_name,
                 media_scale="standard",
                 media_type="image",
-                transport_mode="local_path",
+                transport_mode=transport_mode,
                 prompt=PROMPT_INTERLEAVE_THREE,
                 content=[
-                    build_media_content(first, "image", "local_path", media_base_url, project_root),
+                    build_media_content(first, "image", transport_mode, media_base_url, project_root),
                     text_content("这是第一张。"),
-                    build_media_content(second, "image", "local_path", media_base_url, project_root),
+                    build_media_content(second, "image", transport_mode, media_base_url, project_root),
                     text_content("这是第二张。"),
-                    build_media_content(third, "image", "local_path", media_base_url, project_root),
+                    build_media_content(third, "image", transport_mode, media_base_url, project_root),
                     text_content(f"这是第三张。{PROMPT_INTERLEAVE_THREE}"),
                 ],
                 expected_groups=[SHAPE_SYNONYMS["square"], SHAPE_SYNONYMS["circle"], SHAPE_SYNONYMS["triangle"]],
@@ -471,7 +484,7 @@ def build_standard_semantic_cases(
             )
         )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         for extension in VIDEO_FORMATS:
             path = videos / "720x1280" / extension / f"shapes.{extension}"
             cases.append(
@@ -496,7 +509,7 @@ def build_standard_semantic_cases(
                 )
             )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         for resolution in STANDARD_VIDEO_RESOLUTIONS:
             path = videos / resolution / "mp4" / "shapes.mp4"
             cases.append(
@@ -521,7 +534,7 @@ def build_standard_semantic_cases(
                 )
             )
 
-    for transport_mode in [mode for mode in modes if mode in {"local_path", "http"}]:
+    for transport_mode in modes:
         mp4_video = videos / "720x1280" / "mp4" / "shapes.mp4"
         cases.extend(
             [
@@ -582,6 +595,36 @@ def build_standard_semantic_cases(
                 ),
             ]
         )
+
+    multi_video_suite_name = "phase2_semantic_multi_video_standard"
+    for transport_mode in modes:
+        for count in range(1, len(MULTI_VIDEO_SEQUENCE) + 1):
+            shape_sequence = list(MULTI_VIDEO_SEQUENCE[:count])
+            video_paths = [videos / "720x1280" / "mp4" / f"{shape}.mp4" for shape in shape_sequence]
+            cases.append(
+                _case(
+                    case_id=f"VID-MULTI-{count:02d}-{_transport_code(transport_mode)}",
+                    category="多视频输入理解",
+                    suite_name=multi_video_suite_name,
+                    media_scale="standard",
+                    media_type="video",
+                    transport_mode=transport_mode,
+                    prompt=PROMPT_MULTI_VIDEO,
+                    content=[
+                        text_content(PROMPT_MULTI_VIDEO),
+                        *[
+                            build_media_content(path, "video", transport_mode, media_base_url, project_root)
+                            for path in video_paths
+                        ],
+                    ],
+                    expected_groups=[SHAPE_SYNONYMS[shape] for shape in shape_sequence],
+                    files=video_paths,
+                    resolution="720x1280",
+                    media_format="mp4",
+                    max_completion_tokens=512,
+                    match_mode="ordered_groups",
+                )
+            )
 
     return cases
 
