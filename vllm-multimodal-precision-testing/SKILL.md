@@ -95,6 +95,8 @@ Track broader yes/no perception and reasoning coverage, especially:
 - translation
 - calculation
 
+MME requests use a strict yes/no system prompt so the parser can avoid avoidable `unknown` outputs from long-form explanations.
+
 ### MMBench
 
 Track broader MCQ perception and reasoning coverage, including:

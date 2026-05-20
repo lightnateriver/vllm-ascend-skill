@@ -10,6 +10,11 @@ import pandas as pd
 
 from media_input_utils import add_media_mode_args, build_image_reference, curl_json_request, resolve_model_id
 
+SYSTEM_PROMPT = (
+    "You are a strict yes/no classifier for MME. "
+    "Answer with exactly Yes or No and nothing else."
+)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run MME against a local OpenAI-compatible endpoint.")
@@ -96,6 +101,10 @@ class Client:
         payload = {
             "model": self.model,
             "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                },
                 {
                     "role": "user",
                     "content": [

@@ -77,6 +77,8 @@
 - numerical calculation
 - text translation
 
+脚本会附加严格的 yes/no system prompt，尽量避免模型先输出长解释导致 `unknown`。
+
 ### MMBench
 
 目标是覆盖更宽的 MCQ 感知与推理能力，例如：
