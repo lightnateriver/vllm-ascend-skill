@@ -9,13 +9,11 @@ import json
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from media_input_utils import build_image_reference
+from media_input_utils import build_image_reference, curl_json_request, resolve_model_id
 
 DEFAULT_DATASET_DIR = Path("multi-pics-datasets/cases")
 DEFAULT_OUTPUT_ROOT = Path("multi-pics-runs")
@@ -177,19 +175,11 @@ def extract_prediction(raw_text: str, question_type: str, image_count: int) -> t
     return "UNKNOWN", "unsupported_question_type"
 
 
-def post_json(url: str, payload: dict[str, Any], timeout: float) -> tuple[dict[str, Any], float]:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        url=url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def post_json(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, Any] | None, float, str]:
     started = time.perf_counter()
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        latency_sec = time.perf_counter() - started
-        response_body = response.read().decode("utf-8")
-    return json.loads(response_body), latency_sec
+    status, parsed, body = curl_json_request(url, payload, timeout, "POST")
+    latency_sec = time.perf_counter() - started
+    return status, parsed, latency_sec, body
 
 
 def endpoint_root(endpoint: str) -> str:
@@ -200,18 +190,7 @@ def endpoint_root(endpoint: str) -> str:
 
 
 def get_json(url: str, timeout: float) -> tuple[int, dict[str, Any] | None, str]:
-    request = urllib.request.Request(url=url, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            parsed = json.loads(body) if body.strip() else None
-            return response.status, parsed, body
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        parsed = json.loads(body) if body.strip() else None
-        return exc.code, parsed, body
-    except Exception as exc:  # noqa: BLE001
-        return 0, None, repr(exc)
+    return curl_json_request(url, None, timeout, "GET")
 
 
 def check_ready_models(base_url: str, timeout: float) -> tuple[bool, str]:
@@ -231,19 +210,15 @@ def check_ready_chat(endpoint: str, model: str, timeout: float) -> tuple[bool, s
         "stream": False,
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    try:
-        response_json, _ = post_json(endpoint, payload, timeout)
-        content = (
-            response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
-        )
+    status, response_json, _, body = post_json(endpoint, payload, timeout)
+    if status == 200 and response_json:
+        content = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
         if content.strip():
             return True, "chat_ok"
         return False, "chat_empty"
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace").strip()
-        return False, f"chat_http_{exc.code}:{body[:160]}"
-    except Exception as exc:  # noqa: BLE001
-        return False, f"chat_request_error:{repr(exc)[:160]}"
+    if status == 0:
+        return False, f"chat_request_error:{body[:160]}"
+    return False, f"chat_http_{status}:{body[:160]}"
 
 
 def wait_until_ready(
@@ -316,16 +291,19 @@ def run_case(
         "strict_raw_ok": False,
         "latency_sec": None,
     }
+    status, response_json, latency_sec, body = post_json(endpoint, payload, timeout)
     try:
-        response_json, latency_sec = post_json(endpoint, payload, timeout)
         result["latency_sec"] = round(latency_sec, 3)
         raw_prediction = (
             response_json.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
+            if response_json
+            else ""
         )
         result["raw_prediction"] = raw_prediction
-        result["finish_reason"] = response_json.get("choices", [{}])[0].get("finish_reason")
+        if response_json:
+            result["finish_reason"] = response_json.get("choices", [{}])[0].get("finish_reason")
         extracted, extract_status = extract_prediction(
             raw_prediction,
             case_meta["question_type"],
@@ -335,7 +313,15 @@ def run_case(
         result["strict_raw_ok"] = exact_raw_match(
             raw_prediction, case_meta["question_type"], case_meta["answer"]
         )
-        if extracted == "UNKNOWN":
+        if status == 0:
+            result["status"] = "timeout"
+            result["error_type"] = "timeout" if "timed out" in body.lower() else "request_error"
+            result["raw_prediction"] = body
+        elif status >= 400:
+            result["status"] = "unknown"
+            result["error_type"] = f"http_{status}"
+            result["raw_prediction"] = body
+        elif extracted == "UNKNOWN":
             result["status"] = "unknown"
             result["error_type"] = extract_status
         elif strict_raw and not result["strict_raw_ok"]:
@@ -347,20 +333,6 @@ def run_case(
         else:
             result["status"] = "wrong"
             result["error_type"] = "wrong_answer"
-    except urllib.error.HTTPError as exc:
-        result["status"] = "unknown"
-        result["error_type"] = f"http_{exc.code}"
-        body = exc.read().decode("utf-8", errors="replace")
-        result["raw_prediction"] = body
-    except urllib.error.URLError as exc:
-        reason_text = str(exc.reason).lower()
-        if "timed out" in reason_text:
-            result["status"] = "timeout"
-            result["error_type"] = "timeout"
-        else:
-            result["status"] = "unknown"
-            result["error_type"] = "request_error"
-        result["raw_prediction"] = str(exc)
     except TimeoutError:
         result["status"] = "timeout"
         result["error_type"] = "timeout"
@@ -510,11 +482,17 @@ def main() -> int:
     dataset_dir = Path(args.dataset_dir)
     case_dirs = discover_case_dirs(dataset_dir, args.case, args.case_range)
     run_dir = build_run_dir(args.output_dir, args.run_name)
+    base_url = endpoint_root(args.endpoint)
+    models_status, models_json, _ = get_json(f"{base_url}/v1/models", min(args.timeout, 30.0))
+    resolved_model = args.model
+    if models_status == 200 and models_json and isinstance(models_json.get("data"), list):
+        available_ids = {str(item.get("id", "")) for item in models_json["data"]}
+        resolved_model = resolve_model_id(args.model, available_ids)
 
     if args.wait_ready:
         wait_until_ready(
             endpoint=args.endpoint,
-            model=args.model,
+            model=resolved_model,
             per_request_timeout=min(args.timeout, 30.0),
             ready_timeout=args.ready_timeout,
             poll_interval=args.ready_poll_interval,
@@ -525,7 +503,7 @@ def main() -> int:
         case_meta = load_case(case_dir)
         result = run_case(
             endpoint=args.endpoint,
-            model=args.model,
+            model=resolved_model,
             case_meta=case_meta,
             max_completion_tokens=args.max_completion_tokens,
             temperature=args.temperature,
@@ -544,6 +522,7 @@ def main() -> int:
         )
 
     summary = summarize(results, run_dir, args)
+    summary["resolved_model"] = resolved_model
     write_outputs(run_dir, results, summary)
 
     if args.json:

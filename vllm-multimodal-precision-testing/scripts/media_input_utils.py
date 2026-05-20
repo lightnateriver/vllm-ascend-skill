@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
+import subprocess
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 
@@ -154,3 +157,68 @@ def build_image_reference(
         fallback_suffix=".jpg",
         fallback_mime="image/jpeg",
     )
+
+
+def resolve_model_id(requested_model: str, available_ids: set[str]) -> str:
+    candidates = [
+        requested_model,
+        requested_model.rstrip("/"),
+        requested_model.rstrip("/") + "/",
+    ]
+    for candidate in candidates:
+        if candidate in available_ids:
+            return candidate
+    if len(available_ids) == 1:
+        return next(iter(available_ids))
+    return requested_model
+
+
+def curl_json_request(
+    url: str,
+    payload: dict[str, Any] | None,
+    timeout: float,
+    method: str,
+) -> tuple[int, dict[str, Any] | None, str]:
+    marker = "__CODEX_HTTP_STATUS__"
+    timeout_str = f"{max(timeout, 1.0):g}"
+    cmd = [
+        "curl",
+        "-sS",
+        "--connect-timeout",
+        timeout_str,
+        "--max-time",
+        timeout_str,
+        "-H",
+        "Content-Type: application/json",
+    ]
+    if method != "GET":
+        cmd.extend(["-X", method])
+    if payload is not None:
+        cmd.extend(["--data-binary", "@-"])
+    cmd.extend(["-w", f"\n{marker}%{{http_code}}", url])
+
+    input_bytes = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    proc = subprocess.run(cmd, input=input_bytes, capture_output=True)
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+
+    status = 0
+    body = stdout
+    if marker in stdout:
+        body, status_text = stdout.rsplit(marker, 1)
+        try:
+            status = int(status_text.strip() or "0")
+        except ValueError:
+            status = 0
+
+    if proc.returncode != 0 and status == 0 and not body:
+        return 0, None, stderr or f"curl return code {proc.returncode}"
+
+    parsed = None
+    if body.strip():
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = None
+
+    return status, parsed, body or stderr

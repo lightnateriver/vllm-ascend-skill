@@ -109,6 +109,14 @@
 | `local_path` | `file://` URL | 对外统一口径，底层仍是文件路径 URL |
 | `http` | 本机静态媒体 URL | 用来模拟 URL 输入场景 |
 
+默认假设：
+
+- host: `http://127.0.0.1:8000`
+- model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
+- `L0` 图片目录：`../vllm-multimodal-evaluator/pics/720x1280/jpg`
+- `L0` 视频路径：`../vllm-multimodal-evaluator/video/720x1280/mp4/shapes.mp4`
+- 多图数据集目录：`multi-pics-datasets/cases`
+
 ## 默认执行顺序
 
 标准一键回归默认按下面顺序执行：
@@ -143,6 +151,9 @@
 - `MMBench` 的 `Z` 回退通常优先看输出协议问题
 - `transport_consistency` 失败优先看静态媒体服务和 URL 构造
 
+现在这些脚本还会先读取 `/v1/models`，并把传入的 `--model` 自动归一化到服务真实暴露的模型 id。
+如果服务返回的模型 id 带尾部 `/`，不需要再手工改命令行参数。
+
 ## 报告里应该写什么
 
 每份标准报告都应该明确包含：
@@ -164,6 +175,8 @@
 - `model_limitations`
 - `format_or_protocol_issues`
 - `final_verdict`
+
+这个统一入口现在默认直接引用同仓库里的 `vllm-multimodal-evaluator` 媒体目录，不再依赖旧的外部路径名。
 
 ## 快速入口
 

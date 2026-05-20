@@ -4,10 +4,14 @@ import json
 import re
 import sys
 from pathlib import Path
-import urllib.error
-import urllib.request
 
-from media_input_utils import build_media_reference
+from media_input_utils import build_media_reference, curl_json_request, resolve_model_id
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+DEFAULT_L0_IMAGE_DIR = REPO_ROOT / "vllm-multimodal-evaluator" / "pics" / "720x1280" / "jpg"
+DEFAULT_L0_VIDEO_PATH = REPO_ROOT / "vllm-multimodal-evaluator" / "video" / "720x1280" / "mp4" / "shapes.mp4"
 
 
 def build_image_part(media_ref: str) -> dict:
@@ -158,15 +162,13 @@ def run_case(base_url: str, model: str, case: dict, max_completion_tokens: int) 
         "returncode": 0,
         "stderr": "",
     }
-    request = urllib.request.Request(
-        url=f"{base_url}/v1/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        status, data, body = curl_json_request(f"{base_url}/v1/chat/completions", payload, 180, "POST")
+        if status >= 400 or data is None:
+            rec["returncode"] = status or 1
+            rec["stderr"] = body
+            rec["pass"] = False
+            return rec
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         finish_reason = data.get("choices", [{}])[0].get("finish_reason")
         rec["content"] = content
@@ -175,10 +177,6 @@ def run_case(base_url: str, model: str, case: dict, max_completion_tokens: int) 
         # so "circle, cube, cylinder" matches "circle,cube,cylinder"
         _norm = lambda s: re.sub(r"\s*,\s*", ",", s.strip().lower())
         rec["pass"] = _norm(content) == _norm(case["expected"])
-    except urllib.error.HTTPError as exc:
-        rec["returncode"] = exc.code
-        rec["stderr"] = exc.read().decode("utf-8", errors="replace")
-        rec["pass"] = False
     except Exception as exc:  # noqa: BLE001
         rec["returncode"] = 1
         rec["stderr"] = repr(exc)
@@ -194,28 +192,11 @@ def main() -> int:
     parser.add_argument("--model", default="/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B")
     parser.add_argument(
         "--image-dir",
-        default=str(
-            (
-                Path(__file__).resolve().parents[2]
-                / "vllm-multimodal-evaluator"
-                / "pics"
-                / "720x1280"
-                / "jpg"
-            ).resolve()
-        ),
+        default=str(DEFAULT_L0_IMAGE_DIR),
     )
     parser.add_argument(
         "--video-path",
-        default=str(
-            (
-                Path(__file__).resolve().parents[2]
-                / "vllm-multimodal-evaluator"
-                / "video"
-                / "720x1280"
-                / "mp4"
-                / "shapes.mp4"
-            ).resolve()
-        ),
+        default=str(DEFAULT_L0_VIDEO_PATH),
     )
     parser.add_argument(
         "--media-mode",
@@ -236,6 +217,12 @@ def main() -> int:
     parser.add_argument("--max-completion-tokens", type=int, default=64)
     parser.add_argument("--json", action="store_true", help="Print only JSON results.")
     args = parser.parse_args()
+
+    status, models_json, _ = curl_json_request(f"{args.host}/v1/models", None, 30, "GET")
+    resolved_model = args.model
+    if status == 200 and models_json and isinstance(models_json.get("data"), list):
+        available_ids = {str(item.get("id", "")) for item in models_json["data"]}
+        resolved_model = resolve_model_id(args.model, available_ids)
 
     image_paths = [
         str(Path(args.image_dir) / "circle.jpg"),
@@ -271,7 +258,7 @@ def main() -> int:
     )
     cases = build_cases(image_refs, video_ref)
     results = [
-        run_case(args.host, args.model, case, args.max_completion_tokens)
+        run_case(args.host, resolved_model, case, args.max_completion_tokens)
         for case in cases
     ]
     passed = sum(1 for r in results if r["pass"])

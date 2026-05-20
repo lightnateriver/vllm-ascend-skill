@@ -50,6 +50,7 @@ This split matters because it lets you classify failures more cleanly:
 - terse output drift or explanation-heavy answers are output-format/protocol issues
 
 ## Transport naming
+If the user directly runs the checklist without prebuilt fixtures, the bundled checklist script now auto-generates missing `pics/` and `video/` before evaluating.
 
 Externally, this skill uses:
 
@@ -65,6 +66,7 @@ Reports keep both:
 - `transport_impl=file_url`
 
 ## Default capability coverage
+The bundled script also queries `/v1/models` first and normalizes the requested `--model` to the actual served model id when needed, for example when the service exposes a trailing slash in the model id.
 
 Standard capability runs default to:
 

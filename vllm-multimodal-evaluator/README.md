@@ -204,6 +204,8 @@ python scripts/generate_shape_videos.py
 python scripts/generate_shape_videos.py --resolution-profile large
 ```
 
+这样服务就能读取 `pics/` 和 `video/` 下的本地媒体。
+
 ### 标准 capability run
 
 ```bash
@@ -213,6 +215,20 @@ python scripts/run_multimodal_capability_tests.py \
   --media-base-url http://127.0.0.1:9000 \
   --auto-start-media-server
 ```
+
+如果当前目录下还没有 `pics/` 或 `video/`，脚本现在会先自动调用：
+
+- `scripts/generate_shape_dataset.py`
+- `scripts/generate_shape_videos.py`
+
+也就是说，默认 checklist 已经可以直接从“空数据目录”起跑，不需要先手工生成本地媒体。
+
+默认会输出：
+
+- `results/qwen35_multimodal_capability_report.md`
+- `results/qwen35_multimodal_capability_report.json`
+
+默认请求输出 token 上限为 `512`。如需临时调整默认值，可以传入 `--max-tokens`。
 
 关闭大图 smoke：
 
@@ -225,6 +241,8 @@ python scripts/run_multimodal_capability_tests.py \
 ```
 
 只测部分 transport：
+脚本还会在请求前读取 `/v1/models`，并把传入的 `--model` 自动归一化到服务真实暴露的模型 id。
+例如服务返回的 id 带尾部 `/` 时，脚本会自动对齐，不需要手工改参数。
 
 ```bash
 python scripts/run_multimodal_capability_tests.py \

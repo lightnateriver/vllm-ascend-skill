@@ -30,6 +30,8 @@ DEFAULT_MODEL = "/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B"
 DEFAULT_MEDIA_BASE_URL = "http://127.0.0.1:9000"
 FC_SUITE_NAME = "phase2_function_calling_standard"
 DEFAULT_FC_TEST_FILE = Path(__file__).resolve().with_name("function_calling_test.json")
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 SERVICE_CONFIG_DEFAULTS = {
     "chunked_prefill": True,
@@ -51,43 +53,89 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def post_json(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, Any] | None, str]:
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            return response.status, json.loads(body), body
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
+def ensure_local_media(project_root: Path) -> None:
+    pics_root = project_root / "pics"
+    video_root = project_root / "video"
+    if not pics_root.exists():
+        subprocess.run(
+            ["python3", str(SCRIPT_DIR / "generate_shape_dataset.py")],
+            cwd=project_root,
+            check=True,
+        )
+    if not video_root.exists():
+        subprocess.run(
+            ["python3", str(SCRIPT_DIR / "generate_shape_videos.py")],
+            cwd=project_root,
+            check=True,
+        )
+
+
+def curl_json(url: str, payload: dict[str, Any] | None, timeout: float, method: str) -> tuple[int, dict[str, Any] | None, str]:
+    marker = "__CODEX_HTTP_STATUS__"
+    timeout_str = f"{max(timeout, 1.0):g}"
+    cmd = [
+        "curl",
+        "-sS",
+        "--connect-timeout",
+        timeout_str,
+        "--max-time",
+        timeout_str,
+        "-H",
+        "Content-Type: application/json",
+    ]
+    if method != "GET":
+        cmd.extend(["-X", method])
+    if payload is not None:
+        cmd.extend(["--data-binary", "@-"])
+    cmd.extend(["-w", f"\n{marker}%{{http_code}}", url])
+
+    input_bytes = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    proc = subprocess.run(cmd, input=input_bytes, capture_output=True)
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+
+    status = 0
+    body = stdout
+    if marker in stdout:
+        body, status_text = stdout.rsplit(marker, 1)
+        try:
+            status = int(status_text.strip() or "0")
+        except ValueError:
+            status = 0
+
+    if proc.returncode != 0 and status == 0 and not body:
+        return 0, None, stderr or f"curl return code {proc.returncode}"
+
+    parsed = None
+    if body.strip():
         try:
             parsed = json.loads(body)
         except json.JSONDecodeError:
             parsed = None
-        return exc.code, parsed, body
-    except Exception as exc:
-        return 0, None, repr(exc)
+
+    return status, parsed, body or stderr
+
+
+def resolve_model_id(requested_model: str, available_ids: set[str]) -> str:
+    candidates = [
+        requested_model,
+        requested_model.rstrip("/"),
+        requested_model.rstrip("/") + "/",
+    ]
+    for candidate in candidates:
+        if candidate in available_ids:
+            return candidate
+    if len(available_ids) == 1:
+        return next(iter(available_ids))
+    return requested_model
+
+
+def post_json(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, Any] | None, str]:
+    return curl_json(url, payload, timeout, "POST")
 
 
 def get_json(url: str, timeout: float) -> tuple[int, dict[str, Any] | None, str]:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            return response.status, json.loads(body), body
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
-            parsed = None
-        return exc.code, parsed, body
-    except Exception as exc:
-        return 0, None, repr(exc)
+    return curl_json(url, None, timeout, "GET")
 
 
 def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
@@ -956,6 +1004,7 @@ def main() -> None:
     project_root = args.project_root.resolve()
     results_dir = args.results_dir.resolve() if args.results_dir else (project_root / "results")
 
+    ensure_local_media(project_root)
     ingestion_cases, semantic_cases, enabled_optional_suites = build_capability_cases(
         project_root=project_root,
         media_base_url=args.media_base_url,
@@ -990,13 +1039,16 @@ def main() -> None:
 
     models_status, models_json, models_raw = get_json(f"{args.base_url.rstrip('/')}/models", timeout=10)
     model_available = False
+    resolved_model = args.model
     if models_json and isinstance(models_json.get("data"), list):
         available_ids = {str(item.get("id", "")) for item in models_json["data"]}
-        model_available = args.model in available_ids or bool(available_ids)
+        resolved_model = resolve_model_id(args.model, available_ids)
+        model_available = resolved_model in available_ids
 
     preflight = {
         "base_url": args.base_url,
         "model": args.model,
+        "resolved_model": resolved_model,
         "models_http_status": models_status,
         "models_ok": models_status == 200,
         "model_available": model_available,
@@ -1026,7 +1078,7 @@ def main() -> None:
             results = []
             for case in all_cases:
                 payload = {
-                    "model": args.model,
+                    "model": resolved_model,
                     "messages": [{"role": "user", "content": case.content}],
                     "temperature": 0,
                     "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
@@ -1051,7 +1103,7 @@ def main() -> None:
             results = []
             for case in all_cases:
                 payload = {
-                    "model": args.model,
+                    "model": resolved_model,
                     "messages": [{"role": "user", "content": case.content}],
                     "temperature": 0,
                     "max_completion_tokens": case.max_completion_tokens or args.max_tokens,
@@ -1102,7 +1154,7 @@ def main() -> None:
                         script_path=Path(__file__).resolve().with_name("fc_test.py"),
                         test_file=args.function_calling_test_file.resolve(),
                         base_url=args.base_url,
-                        model=args.model,
+                        model=resolved_model,
                     )
                 )
 

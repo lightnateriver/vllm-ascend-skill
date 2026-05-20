@@ -26,6 +26,16 @@ This skill currently covers:
 
 ## Default behavior
 
+Default assumptions used by the bundled scripts:
+
+- host: `http://127.0.0.1:8000`
+- model: `/mnt/sfs_turbo/models/Qwen/Qwen3.5-4B`
+- image dir: `../vllm-multimodal-evaluator/pics/720x1280/jpg`
+- video path: `../vllm-multimodal-evaluator/video/720x1280/mp4/shapes.mp4`
+- multi-pics dataset dir: `multi-pics-datasets/cases`
+- MME TSV: `/tmp/MME.tsv`
+- MMBench TSV: `/tmp/MMBench_DEV_EN.tsv`
+
 Standard regression defaults to:
 
 - all three transport modes:
@@ -43,7 +53,20 @@ Standard regression defaults to:
 
 ## Test purposes
 
-### L0
+When testing input-link behavior, prefer using the new shared media-mode layer in the bundled scripts:
+
+- `--media-mode base64`
+- `--media-mode local_path`
+- `--media-mode http`
+
+For `local_path`, the served model process must allow the media root via `--allowed-local-media-path`.
+For `http`, use a local static server such as `http://127.0.0.1:9000`, not a remote host.
+
+The bundled runners now also query `/v1/models` first and normalize the requested model id when the service exposes a different canonical form, such as a trailing slash.
+
+## L0 Smoke
+
+### Goal
 
 Catch obvious regressions in:
 

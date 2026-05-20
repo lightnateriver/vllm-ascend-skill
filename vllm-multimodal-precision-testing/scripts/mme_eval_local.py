@@ -7,9 +7,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
-import requests
 
-from media_input_utils import add_media_mode_args, build_image_reference
+from media_input_utils import add_media_mode_args, build_image_reference, curl_json_request, resolve_model_id
 
 
 def parse_args():
@@ -92,10 +91,6 @@ class Client:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
 
     def infer(self, question, image_ref):
         payload = {
@@ -117,15 +112,9 @@ class Client:
         last_err = None
         for _ in range(3):
             try:
-                resp = requests.post(
-                    self.endpoint,
-                    headers=self.headers,
-                    data=json.dumps(payload),
-                    timeout=self.timeout,
-                )
-                if resp.status_code >= 400:
-                    raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:1000]}")
-                data = resp.json()
+                status, data, body = curl_json_request(self.endpoint, payload, self.timeout, "POST")
+                if status >= 400 or data is None:
+                    raise RuntimeError(f"HTTP {status}: {body[:1000]}")
                 return data["choices"][0]["message"]["content"].strip()
             except Exception as err:
                 last_err = err
@@ -164,6 +153,12 @@ def main():
     args = parse_args()
     out_prefix = Path(args.out_prefix)
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
+    endpoint_root = args.endpoint.rsplit("/v1/chat/completions", 1)[0]
+    status, models_json, _ = curl_json_request(f"{endpoint_root}/v1/models", None, min(args.timeout, 30), "GET")
+    resolved_model = args.model
+    if status == 200 and models_json and isinstance(models_json.get("data"), list):
+        available_ids = {str(item.get("id", "")) for item in models_json["data"]}
+        resolved_model = resolve_model_id(args.model, available_ids)
 
     rows = load_mme_rows(args.tsv, args.limit)
     media_root = args.media_root or str(out_prefix.parent / "_media_cache" / "mme")
@@ -181,7 +176,7 @@ def main():
 
     client = Client(
         endpoint=args.endpoint,
-        model=args.model,
+        model=resolved_model,
         api_key=args.api_key,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
@@ -257,6 +252,7 @@ def main():
     summary = {
         "rows": len(pred_df),
         "media_mode": args.media_mode,
+        "resolved_model": resolved_model,
         "media_root": media_root if args.media_mode != "base64" else "",
         "media_base_url": args.media_base_url,
         "exact_acc": float(pred_df["score"].mean() * 100),
