@@ -31,7 +31,6 @@ DEFAULT_MEDIA_BASE_URL = "http://127.0.0.1:9000"
 FC_SUITE_NAME = "phase2_function_calling_standard"
 DEFAULT_FC_TEST_FILE = Path(__file__).resolve().with_name("function_calling_test.json")
 SCRIPT_DIR = Path(__file__).resolve().parent
-SCRIPT_DIR = Path(__file__).resolve().parent
 
 SERVICE_CONFIG_DEFAULTS = {
     "chunked_prefill": True,
@@ -53,21 +52,49 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def ensure_local_media(project_root: Path) -> None:
+def ensure_local_media(
+    project_root: Path,
+    include_large_image_smoke: bool,
+    large_image_resolutions: list[str],
+) -> None:
     pics_root = project_root / "pics"
     video_root = project_root / "video"
-    if not pics_root.exists():
+    standard_image_probes = [
+        pics_root / "720x1280" / "tiff" / "triangle.tiff",
+        pics_root / "1920x1080" / "jpg" / "circle.jpg",
+        pics_root / "720x1280" / "jpg" / "cube.jpg",
+    ]
+    if any(not path.exists() for path in standard_image_probes):
         subprocess.run(
-            ["python3", str(SCRIPT_DIR / "generate_shape_dataset.py")],
+            ["python3", str(SCRIPT_DIR / "generate_shape_dataset.py"), "--resolution-profile", "standard"],
             cwd=project_root,
             check=True,
         )
-    if not video_root.exists():
+    standard_video_probes = [
+        video_root / "720x1280" / "avi" / "shapes.avi",
+        video_root / "1080x1920" / "mp4" / "shapes.mp4",
+        video_root / "720x1280" / "mp4" / "square.mp4",
+    ]
+    if any(not path.exists() for path in standard_video_probes):
         subprocess.run(
-            ["python3", str(SCRIPT_DIR / "generate_shape_videos.py")],
+            ["python3", str(SCRIPT_DIR / "generate_shape_videos.py"), "--resolution-profile", "standard"],
             cwd=project_root,
             check=True,
         )
+    if include_large_image_smoke:
+        large_image_probes = [pics_root / resolution / "jpg" / "square.jpg" for resolution in large_image_resolutions]
+        if any(not path.exists() for path in large_image_probes):
+            cmd = [
+                "python3",
+                str(SCRIPT_DIR / "generate_shape_dataset.py"),
+                "--resolution-profile",
+                "large",
+                "--formats",
+                "jpg",
+            ]
+            if large_image_resolutions:
+                cmd.extend(["--resolutions", *large_image_resolutions])
+            subprocess.run(cmd, cwd=project_root, check=True)
 
 
 def curl_json(url: str, payload: dict[str, Any] | None, timeout: float, method: str) -> tuple[int, dict[str, Any] | None, str]:
@@ -1004,7 +1031,11 @@ def main() -> None:
     project_root = args.project_root.resolve()
     results_dir = args.results_dir.resolve() if args.results_dir else (project_root / "results")
 
-    ensure_local_media(project_root)
+    ensure_local_media(
+        project_root,
+        include_large_image_smoke=args.include_large_image_smoke,
+        large_image_resolutions=list(args.large_image_resolutions),
+    )
     ingestion_cases, semantic_cases, enabled_optional_suites = build_capability_cases(
         project_root=project_root,
         media_base_url=args.media_base_url,
@@ -1129,7 +1160,7 @@ def main() -> None:
                 run_ingestion_case(
                     case=c,
                     base_url=args.base_url,
-                    model=args.model,
+                    model=resolved_model,
                     timeout=resolve_case_timeout(c, args.timeout, args.video_timeout),
                     project_root=project_root,
                     default_max_tokens=args.max_tokens,
@@ -1140,7 +1171,7 @@ def main() -> None:
                 run_semantic_case(
                     case=c,
                     base_url=args.base_url,
-                    model=args.model,
+                    model=resolved_model,
                     timeout=resolve_case_timeout(c, args.timeout, args.video_timeout),
                     project_root=project_root,
                     default_max_tokens=args.max_tokens,
