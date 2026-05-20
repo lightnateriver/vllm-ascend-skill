@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import functools
 import json
 import subprocess
@@ -196,7 +197,17 @@ def maybe_start_media_server(
         return
 
     handler = functools.partial(QuietHTTPRequestHandler, directory=str(project_root))
-    httpd = ReusableThreadingHTTPServer((host, port), handler)
+    try:
+        httpd = ReusableThreadingHTTPServer((host, port), handler)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            if is_url_reachable(media_base_url, timeout=2.0):
+                yield
+                return
+            raise RuntimeError(
+                f"Media server port {port} is already in use, but {media_base_url} is not serving HTTP media."
+            ) from exc
+        raise
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -303,6 +314,7 @@ def run_semantic_case(
         "temperature": 0,
         "max_completion_tokens": case.max_completion_tokens or default_max_tokens,
         "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     start = time.perf_counter()
     http_status, response_json, raw_body = post_json(url, payload, timeout)
@@ -328,6 +340,7 @@ def run_ingestion_case(
         "temperature": 0,
         "max_completion_tokens": case.max_completion_tokens or default_max_tokens,
         "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     start = time.perf_counter()
     http_status, response_json, raw_body = post_json(url, payload, timeout)
