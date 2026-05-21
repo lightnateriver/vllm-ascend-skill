@@ -67,6 +67,7 @@ Reports keep both:
 
 ## Default capability coverage
 The bundled script also queries `/v1/models` first and normalizes the requested `--model` to the actual served model id when needed, for example when the service exposes a trailing slash in the model id.
+Do not assume `rtk` exists in a fresh session. Manual top-level commands should default to plain `python3`. The bundled evaluator probes `RTK_BIN` and `PATH` first, and only wraps child Python commands with `rtk` after it confirms an executable `rtk` is actually available.
 
 Standard capability runs default to:
 
@@ -108,7 +109,7 @@ Other evaluator items default to `local_path` only.
 If the user explicitly asks for full transport coverage on every evaluator item, run with:
 
 ```bash
-python scripts/run_multimodal_capability_tests.py --full-transport-matrix
+python3 scripts/run_multimodal_capability_tests.py --full-transport-matrix
 ```
 
 ## Supported test content
@@ -150,6 +151,32 @@ Suggested flow:
 4. inspect phase-separated failures
 5. only then move to precision testing
 
+Practical usage notes for a fresh session:
+
+- the standard checklist is not a seconds-level smoke test; it includes video semantics, large-image smoke, and function calling
+- video semantic cases default to a long timeout path, so expect minutes rather than seconds
+- if you reuse `http://127.0.0.1:9000`, make sure it really serves this skill's `pics/` and `video/` tree, not just “some HTTP server”
+- if shell `curl http://127.0.0.1:8000/v1/models` works but the Python checklist still says `/v1/models` is unavailable, suspect the current execution environment first, not the model
+- when `http` transport is enabled, check whether Python child processes are allowed to bind a localhost media port; a sandbox can block this even when the parent shell looks healthy
+- default to plain `python3 ...` for top-level manual commands; only switch to `rtk python3 ...` after you explicitly confirm `rtk` exists in the current environment
+- prefer setting a unique `--results-dir` per run so old reports do not get mistaken for the current execution
+
+Optional RTK probe for a fresh session:
+
+```bash
+if command -v rtk >/dev/null 2>&1; then
+  RUNNER=(rtk python3)
+else
+  RUNNER=(python3)
+fi
+
+"${RUNNER[@]}" scripts/run_multimodal_capability_tests.py \
+  --base-url http://127.0.0.1:8000/v1 \
+  --model /path/to/Qwen3.5-4B \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
+```
+
 ## Failure attribution
 
 Use the following rule of thumb:
@@ -175,6 +202,7 @@ Capability reports should include at least:
 - counts by suite
 - counts by media scale
 - counts by transport mode
+- execution-environment checks for Python `/v1/models` access and localhost media binding / reuse
 - `failure_class`
 - `root_cause_note`
 
@@ -190,11 +218,23 @@ For the current repository version:
 ## Default command
 
 ```bash
-python scripts/run_multimodal_capability_tests.py \
+python3 scripts/run_multimodal_capability_tests.py \
   --base-url http://127.0.0.1:8000/v1 \
   --model /path/to/Qwen3.5-4B \
   --media-base-url http://127.0.0.1:9000 \
   --auto-start-media-server
+```
+
+Machine-readable stdout:
+
+```bash
+python3 scripts/run_multimodal_capability_tests.py \
+  --base-url http://127.0.0.1:8000/v1 \
+  --model /path/to/Qwen3.5-4B \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server \
+  --results-dir /tmp/evaluator_run_$(date +%Y%m%d_%H%M%S) \
+  --json
 ```
 
 ## Human summary

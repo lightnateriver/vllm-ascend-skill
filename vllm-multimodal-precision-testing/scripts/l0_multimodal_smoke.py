@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from media_input_utils import build_media_reference, curl_json_request, resolve_model_id
+from media_input_utils import build_media_reference, curl_json_request, local_http_media_server, resolve_model_id
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -233,34 +233,35 @@ def main() -> int:
         str(Path(args.image_dir) / "square.jpg"),
         str(Path(args.image_dir) / "triangle.jpg"),
     ]
-    image_refs = [
-        build_media_reference(
+    with local_http_media_server(args.media_mode, args.media_root, args.media_base_url) as effective_media_base_url:
+        image_refs = [
+            build_media_reference(
+                encoded_payload=None,
+                source_path=image_path,
+                media_mode=args.media_mode,
+                media_root=args.media_root,
+                media_base_url=effective_media_base_url or "",
+                fallback_name=Path(image_path).name,
+                fallback_suffix=".jpg",
+                fallback_mime="image/jpeg",
+            )
+            for image_path in image_paths
+        ]
+        video_ref, video_local_path = build_media_reference(
             encoded_payload=None,
-            source_path=image_path,
+            source_path=args.video_path,
             media_mode=args.media_mode,
             media_root=args.media_root,
-            media_base_url=args.media_base_url,
-            fallback_name=Path(image_path).name,
-            fallback_suffix=".jpg",
-            fallback_mime="image/jpeg",
+            media_base_url=effective_media_base_url or "",
+            fallback_name=Path(args.video_path).name,
+            fallback_suffix=".mp4",
+            fallback_mime="video/mp4",
         )
-        for image_path in image_paths
-    ]
-    video_ref, video_local_path = build_media_reference(
-        encoded_payload=None,
-        source_path=args.video_path,
-        media_mode=args.media_mode,
-        media_root=args.media_root,
-        media_base_url=args.media_base_url,
-        fallback_name=Path(args.video_path).name,
-        fallback_suffix=".mp4",
-        fallback_mime="video/mp4",
-    )
-    cases = build_cases(image_refs, video_ref)
-    results = [
-        run_case(args.host, resolved_model, case, args.max_completion_tokens)
-        for case in cases
-    ]
+        cases = build_cases(image_refs, video_ref)
+        results = [
+            run_case(args.host, resolved_model, case, args.max_completion_tokens)
+            for case in cases
+        ]
     passed = sum(1 for r in results if r["pass"])
     failed = len(results) - passed
 
@@ -273,6 +274,7 @@ def main() -> int:
                         "failed": failed,
                         "total": len(results),
                         "media_mode": args.media_mode,
+                        "media_base_url": effective_media_base_url if args.media_mode == "http" else "",
                         "video_local_path": video_local_path,
                     },
                     "results": results,

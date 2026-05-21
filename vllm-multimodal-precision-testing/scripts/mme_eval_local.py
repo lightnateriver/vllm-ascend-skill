@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from media_input_utils import add_media_mode_args, build_image_reference, curl_json_request, resolve_model_id
+from media_input_utils import add_media_mode_args, build_image_reference, curl_json_request, local_http_media_server, resolve_model_id
 
 SYSTEM_PROMPT = (
     "You are a strict yes/no classifier for MME. "
@@ -171,28 +171,6 @@ def main():
 
     rows = load_mme_rows(args.tsv, args.limit)
     media_root = args.media_root or str(out_prefix.parent / "_media_cache" / "mme")
-    for row in rows:
-        image_ref, local_image_path = build_image_reference(
-            image_b64=row["image_b64"],
-            image_path=row["image_path"],
-            media_mode=args.media_mode,
-            media_root=media_root,
-            media_base_url=args.media_base_url,
-            fallback_name=f"mme/{row['image_path']}",
-        )
-        row["image_ref"] = image_ref
-        row["local_image_path"] = local_image_path
-
-    client = Client(
-        endpoint=args.endpoint,
-        model=resolved_model,
-        api_key=args.api_key,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        timeout=args.timeout,
-    )
-
-    results = [None] * len(rows)
 
     def run_one(i, row):
         try:
@@ -240,15 +218,38 @@ def main():
                 "root_cause_note": "Request failed before a stable answer was obtained; treat as serving or transport issue first.",
             }
 
-    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = [pool.submit(run_one, i, row) for i, row in enumerate(rows)]
-        done = 0
-        for fut in as_completed(futures):
-            idx, item = fut.result()
-            results[idx] = item
-            done += 1
-            if done % 50 == 0 or done == len(rows):
-                print(f"progress {done}/{len(rows)}", flush=True)
+    with local_http_media_server(args.media_mode, media_root, args.media_base_url) as effective_media_base_url:
+        for row in rows:
+            image_ref, local_image_path = build_image_reference(
+                image_b64=row["image_b64"],
+                image_path=row["image_path"],
+                media_mode=args.media_mode,
+                media_root=media_root,
+                media_base_url=effective_media_base_url or "",
+                fallback_name=f"mme/{row['image_path']}",
+            )
+            row["image_ref"] = image_ref
+            row["local_image_path"] = local_image_path
+
+        client = Client(
+            endpoint=args.endpoint,
+            model=resolved_model,
+            api_key=args.api_key,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            timeout=args.timeout,
+        )
+
+        results = [None] * len(rows)
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            futures = [pool.submit(run_one, i, row) for i, row in enumerate(rows)]
+            done = 0
+            for fut in as_completed(futures):
+                idx, item = fut.result()
+                results[idx] = item
+                done += 1
+                if done % 50 == 0 or done == len(rows):
+                    print(f"progress {done}/{len(rows)}", flush=True)
 
     pred_df = pd.DataFrame(results)
     score_df = mme_rating(pred_df)
@@ -263,7 +264,7 @@ def main():
         "media_mode": args.media_mode,
         "resolved_model": resolved_model,
         "media_root": media_root if args.media_mode != "base64" else "",
-        "media_base_url": args.media_base_url,
+        "media_base_url": effective_media_base_url if args.media_mode == "http" else args.media_base_url,
         "exact_acc": float(pred_df["score"].mean() * 100),
         "unknown": int((pred_df["extracted"] == "Unknown").sum()),
         "failure_class_counts": {

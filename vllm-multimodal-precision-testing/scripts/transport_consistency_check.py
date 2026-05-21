@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import functools
 import json
 import subprocess
-import sys
 import threading
 import urllib.parse
 import urllib.request
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from runner_exec_utils import build_python_cmd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -69,8 +70,32 @@ def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
+def resolve_media_probe_path(image_dir: str, video_path: str) -> Path | None:
+    candidates = [
+        Path(image_dir).expanduser().resolve() / "circle.jpg",
+        Path(image_dir).expanduser().resolve() / "rectangle.jpg",
+        Path(video_path).expanduser().resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def build_media_probe_url(media_base_url: str, media_root: str, probe_path: Path | None) -> str | None:
+    if probe_path is None:
+        return None
+    resolved_root = Path(media_root).expanduser().resolve()
+    try:
+        relative = probe_path.resolve().relative_to(resolved_root)
+    except ValueError:
+        return None
+    quoted = "/".join(urllib.parse.quote(part) for part in relative.parts)
+    return f"{media_base_url.rstrip('/')}/{quoted}"
+
+
 @contextlib.contextmanager
-def maybe_start_media_server(media_base_url: str, media_root: str):
+def maybe_start_media_server(media_base_url: str, media_root: str, probe_path: Path | None = None):
     parsed = urllib.parse.urlparse(media_base_url)
     host = parsed.hostname or ""
     port = parsed.port or 80
@@ -78,13 +103,25 @@ def maybe_start_media_server(media_base_url: str, media_root: str):
         yield
         return
 
+    probe_url = build_media_probe_url(media_base_url, media_root, probe_path)
     if is_url_reachable(media_base_url, timeout=2.0):
+        if probe_url is None or is_url_reachable(probe_url, timeout=2.0):
+            yield
+            return
+        # HTTP child runs can self-host a correct local media server and pick an
+        # alternate localhost port when a conflicting shared server is present.
         yield
         return
 
     root = Path(media_root).expanduser().resolve()
     handler = functools.partial(QuietHTTPRequestHandler, directory=str(root))
-    httpd = ReusableThreadingHTTPServer((host, port), handler)
+    try:
+        httpd = ReusableThreadingHTTPServer((host, port), handler)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            yield
+            return
+        raise
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -95,9 +132,8 @@ def maybe_start_media_server(media_base_url: str, media_root: str):
 
 
 def run_l0(mode: str, args: argparse.Namespace) -> dict:
-    cmd = [
-        sys.executable,
-        str(SCRIPT_DIR / "l0_multimodal_smoke.py"),
+    cmd = build_python_cmd(
+        SCRIPT_DIR / "l0_multimodal_smoke.py",
         "--host",
         args.host,
         "--model",
@@ -109,13 +145,27 @@ def run_l0(mode: str, args: argparse.Namespace) -> dict:
         "--media-mode",
         mode,
         "--json",
-    ]
+    )
     if mode != "base64":
         cmd.extend(["--media-root", args.media_root])
     if mode == "http":
         cmd.extend(["--media-base-url", args.media_base_url])
     proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
-    parsed = json.loads(proc.stdout)
+    parsed = None
+    if proc.stdout.strip():
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            parsed = None
+    if not isinstance(parsed, dict):
+        return {
+            "mode": mode,
+            "returncode": proc.returncode,
+            "summary": {"passed": 0, "failed": 0, "total": 0},
+            "stderr": (proc.stderr or proc.stdout).strip(),
+            "execution_error_count": 1,
+            "execution_error_cases": [f"{mode}:runner_parse_failure"],
+        }
     summary = parsed["summary"]
     execution_error_cases = [
         item["id"]
@@ -166,8 +216,7 @@ def compare_modes(results: list[dict], tolerance: float) -> dict:
 
 def main() -> int:
     args = parse_args()
-    with maybe_start_media_server(args.media_base_url, args.media_root):
-        results = [run_l0(mode, args) for mode in ("base64", "local_path", "http")]
+    results = [run_l0(mode, args) for mode in ("base64", "local_path", "http")]
     comparison = compare_modes(results, args.tolerance)
     payload = {
         "results": results,

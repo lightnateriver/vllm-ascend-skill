@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
+import errno
 import json
 import shlex
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from runner_exec_utils import build_python_launch
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -101,25 +103,41 @@ def extract_json_suffix(stdout: str):
     return None
 
 
-def run_and_capture(name: str, cmd, work_dir: Path):
+def run_and_capture(name: str, launch, work_dir: Path):
     work_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    cmd = launch["cmd"]
+    env = launch.get("env")
+    launch_meta = launch.get("meta", {})
+    launch_error = ""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT), env=env)
+        stdout = proc.stdout
+        stderr = proc.stderr
+        returncode = proc.returncode
+    except OSError as exc:
+        proc = None
+        stdout = ""
+        stderr = f"{type(exc).__name__}: {exc}"
+        launch_error = stderr
+        returncode = 127 if getattr(exc, "errno", None) == errno.ENOENT or isinstance(exc, FileNotFoundError) else 126
     cmd_path = work_dir / "cmd.sh"
     stdout_path = work_dir / "stdout.txt"
     stderr_path = work_dir / "stderr.txt"
     write_text(cmd_path, render_shell_cmd(cmd) + "\n")
-    write_text(stdout_path, proc.stdout)
-    write_text(stderr_path, proc.stderr)
+    write_text(stdout_path, stdout)
+    write_text(stderr_path, stderr)
     result = {
         "name": name,
         "cmd": cmd,
-        "returncode": proc.returncode,
+        "launch": launch_meta,
+        "launch_error": launch_error,
+        "returncode": returncode,
         "stdout_path": str(stdout_path),
         "stderr_path": str(stderr_path),
         "command_path": str(cmd_path),
     }
-    if proc.stdout:
-        result["parsed_json"] = extract_json_suffix(proc.stdout)
+    if stdout:
+        result["parsed_json"] = extract_json_suffix(stdout)
     return result
 
 
@@ -132,13 +150,16 @@ def load_json_if_exists(path: Path):
 def summarize_capability(report_json):
     if not report_json:
         return {}
+    summary = report_json.get("summary", report_json)
+    preflight = report_json.get("preflight", {})
     return {
-        "counts_by_status": report_json.get("counts_by_status", {}),
-        "counts_by_test_type": report_json.get("counts_by_test_type", {}),
-        "included_test_items": report_json.get("included_test_items", []),
-        "engineering_errors": report_json.get("engineering_errors", []),
-        "model_limitations": report_json.get("model_limitations", []),
-        "non_pass_case_count": len(report_json.get("non_pass_cases", [])),
+        "counts_by_status": summary.get("counts_by_status", {}),
+        "counts_by_test_type": summary.get("counts_by_test_type", {}),
+        "included_test_items": summary.get("included_test_items", []),
+        "engineering_errors": summary.get("engineering_errors", []),
+        "model_limitations": summary.get("model_limitations", []),
+        "non_pass_case_count": len(summary.get("non_pass_cases", [])),
+        "runtime_warnings": preflight.get("runtime_warnings", []),
     }
 
 
@@ -240,6 +261,17 @@ def render_summary_markdown(summary):
                 "",
             ]
         )
+        capability_warnings = capability_summary.get("runtime_warnings", [])
+        if capability_warnings:
+            lines.extend(
+                [
+                    "### Capability Runtime Warnings",
+                    "",
+                ]
+            )
+            for warning in capability_warnings:
+                lines.append(f"- {warning}")
+            lines.append("")
         included_items = capability_summary.get("included_test_items", [])
         if included_items:
             lines.extend(
@@ -312,9 +344,8 @@ def main():
     if args.skip_capability:
         summary["capability"] = {"skipped": True, "returncode": None}
     else:
-        capability_cmd = [
-            sys.executable,
-            str(CAPABILITY_SCRIPT),
+        capability_launch = build_python_launch(
+            CAPABILITY_SCRIPT,
             "--base-url",
             f"{args.host.rstrip('/')}/v1",
             "--model",
@@ -337,10 +368,11 @@ def main():
             str(args.enforce_eager),
             "--media-base-url",
             args.media_base_url,
-        ]
-        capability_cmd.append("--auto-start-media-server" if args.auto_start_media_server else "--no-auto-start-media-server")
-        capability_result = run_and_capture("capability", capability_cmd, capability_dir / "_runner")
-        capability_payload = load_json_if_exists(capability_report_json)
+            "--json",
+        )
+        capability_launch["cmd"].append("--auto-start-media-server" if args.auto_start_media_server else "--no-auto-start-media-server")
+        capability_result = run_and_capture("capability", capability_launch, capability_dir / "_runner")
+        capability_payload = load_json_if_exists(capability_report_json) or capability_result.get("parsed_json")
         capability_result["report_json"] = str(capability_report_json)
         capability_result["report_md"] = str(capability_report_md)
         capability_result["summary"] = summarize_capability(capability_payload)
@@ -354,9 +386,8 @@ def main():
     if args.skip_precision:
         summary["precision"] = {"skipped": True, "returncode": None}
     else:
-        precision_cmd = [
-            sys.executable,
-            str(PRECISION_SCRIPT),
+        precision_launch = build_python_launch(
+            PRECISION_SCRIPT,
             "--host",
             args.host,
             "--model",
@@ -378,11 +409,11 @@ def main():
             "--run-name",
             precision_run_name,
             "--json",
-        ]
+        )
         if args.no_auto_download:
-            precision_cmd.append("--no-auto-download")
-        precision_cmd.append("--auto-start-media-server" if args.auto_start_media_server else "--no-auto-start-media-server")
-        precision_result = run_and_capture("precision", precision_cmd, precision_root / "_runner")
+            precision_launch["cmd"].append("--no-auto-download")
+        precision_launch["cmd"].append("--auto-start-media-server" if args.auto_start_media_server else "--no-auto-start-media-server")
+        precision_result = run_and_capture("precision", precision_launch, precision_root / "_runner")
         precision_payload = load_json_if_exists(precision_summary_json) or precision_result.get("parsed_json")
         precision_result["summary_json"] = str(precision_summary_json)
         precision_result["summary_md"] = str(precision_summary_md)

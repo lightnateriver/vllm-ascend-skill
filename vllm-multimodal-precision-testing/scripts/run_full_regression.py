@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import errno
 import functools
 import json
 import shlex
@@ -14,6 +15,8 @@ import urllib.parse
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from runner_exec_utils import build_python_launch
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -45,13 +48,65 @@ def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
+def build_execution_environment_check(host: str, media_base_url: str, media_root: str, probe_path: Path | None) -> dict:
+    models_url = f"{host.rstrip('/')}/v1/models"
+    media_probe_url = build_media_probe_url(media_base_url, media_root, probe_path) if media_base_url else None
+    return {
+        "python_models_probe": {
+            "url": models_url,
+            "ok": is_url_reachable(models_url, timeout=5.0),
+        },
+        "media_http_probe": {
+            "base_url": media_base_url or "",
+            "base_url_reachable": bool(media_base_url and is_url_reachable(media_base_url, timeout=2.0)),
+            "expected_media_url": media_probe_url or "",
+            "expected_media_reachable": bool(media_probe_url and is_url_reachable(media_probe_url, timeout=2.0)),
+        },
+    }
+
+
+def resolve_media_probe_path(image_dir: str, video_path: str) -> Path | None:
+    candidates = [
+        Path(image_dir).expanduser().resolve() / "circle.jpg",
+        Path(image_dir).expanduser().resolve() / "rectangle.jpg",
+        Path(video_path).expanduser().resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def build_media_probe_url(media_base_url: str, media_root: str, probe_path: Path | None) -> str | None:
+    if probe_path is None:
+        return None
+    resolved_root = Path(media_root).expanduser().resolve()
+    try:
+        relative = probe_path.resolve().relative_to(resolved_root)
+    except ValueError:
+        return None
+    quoted = "/".join(urllib.parse.quote(part) for part in relative.parts)
+    return f"{media_base_url.rstrip('/')}/{quoted}"
+
+
 @contextlib.contextmanager
 def maybe_start_media_server(
     media_base_url: str,
     media_root: str,
     auto_start: bool,
+    probe_path: Path | None = None,
+    warnings: list[str] | None = None,
+    observations: dict | None = None,
 ):
     if not auto_start or not media_base_url:
+        if observations is not None:
+            observations.update(
+                {
+                    "parent_auto_start_requested": bool(auto_start),
+                    "strategy": "not_requested",
+                    "parent_bind_attempted": False,
+                }
+            )
         yield
         return
 
@@ -59,18 +114,92 @@ def maybe_start_media_server(
     host = parsed.hostname or ""
     port = parsed.port or 80
     if parsed.scheme != "http" or host not in {"127.0.0.1", "localhost"}:
+        if observations is not None:
+            observations.update(
+                {
+                    "parent_auto_start_requested": bool(auto_start),
+                    "strategy": "non_local_http_url",
+                    "parent_bind_attempted": False,
+                }
+            )
         yield
         return
 
+    probe_url = build_media_probe_url(media_base_url, media_root, probe_path)
     if is_url_reachable(media_base_url, timeout=2.0):
+        if probe_url is None or is_url_reachable(probe_url, timeout=2.0):
+            if observations is not None:
+                observations.update(
+                    {
+                        "parent_auto_start_requested": True,
+                        "strategy": "reuse_existing_expected_server",
+                        "parent_bind_attempted": False,
+                    }
+                )
+            yield
+            return
+        if warnings is not None:
+            warnings.append(
+                f"{media_base_url} is reachable but is not serving the expected regression media root; "
+                "skipping parent auto-start and relying on child fallbacks."
+            )
+        if observations is not None:
+            observations.update(
+                {
+                    "parent_auto_start_requested": True,
+                    "strategy": "existing_server_wrong_root",
+                    "parent_bind_attempted": False,
+                }
+            )
         yield
         return
 
     root = Path(media_root).expanduser().resolve()
     handler = functools.partial(QuietHTTPRequestHandler, directory=str(root))
-    httpd = ReusableThreadingHTTPServer((host, port), handler)
+    try:
+        httpd = ReusableThreadingHTTPServer((host, port), handler)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            if warnings is not None:
+                warnings.append(
+                    f"Parent media server port {port} is already in use; skipping local auto-start."
+                )
+            if observations is not None:
+                observations.update(
+                    {
+                        "parent_auto_start_requested": True,
+                        "strategy": "eaddrinuse",
+                        "parent_bind_attempted": True,
+                    }
+                )
+            yield
+            return
+        if exc.errno in {errno.EPERM, errno.EACCES} or isinstance(exc, PermissionError):
+            if warnings is not None:
+                warnings.append(
+                    f"Parent media server bind on {host}:{port} was denied; skipping local auto-start and relying on child fallback."
+                )
+            if observations is not None:
+                observations.update(
+                    {
+                        "parent_auto_start_requested": True,
+                        "strategy": "bind_denied",
+                        "parent_bind_attempted": True,
+                    }
+                )
+            yield
+            return
+        raise
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+    if observations is not None:
+        observations.update(
+            {
+                "parent_auto_start_requested": True,
+                "strategy": "started_parent_server",
+                "parent_bind_attempted": True,
+            }
+        )
     try:
         yield
     finally:
@@ -213,22 +342,38 @@ def extract_json_suffix(stdout: str):
     return None
 
 
-def run_json_step(name, cmd, step_dir: Path):
+def run_json_step(name, launch, step_dir: Path):
     step_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    cmd = launch["cmd"]
+    env = launch.get("env")
+    launch_meta = launch.get("meta", {})
+    launch_error = ""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT), env=env)
+        stdout = proc.stdout
+        stderr = proc.stderr
+        returncode = proc.returncode
+    except OSError as exc:
+        proc = None
+        returncode = 127 if getattr(exc, "errno", None) == errno.ENOENT or isinstance(exc, FileNotFoundError) else 126
+        stdout = ""
+        stderr = f"{type(exc).__name__}: {exc}"
+        launch_error = stderr
     cmd_path = step_dir / "cmd.sh"
     stdout_path = step_dir / "stdout.txt"
     stderr_path = step_dir / "stderr.txt"
     process_meta_path = step_dir / "process.json"
     write_text(cmd_path, render_shell_cmd(cmd) + "\n")
-    write_text(stdout_path, proc.stdout)
-    write_text(stderr_path, proc.stderr)
+    write_text(stdout_path, stdout)
+    write_text(stderr_path, stderr)
     result = {
         "name": name,
         "cmd": cmd,
-        "returncode": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "launch": launch_meta,
+        "launch_error": launch_error,
+        "returncode": returncode,
+        "stdout": stdout,
+        "stderr": stderr,
         "artifacts": {
             "step_dir": str(step_dir),
             "command": str(cmd_path),
@@ -237,13 +382,16 @@ def run_json_step(name, cmd, step_dir: Path):
             "process": str(process_meta_path),
         },
     }
-    result["parsed"] = extract_json_suffix(proc.stdout)
+    result["parsed"] = extract_json_suffix(stdout)
     write_json(
         process_meta_path,
         {
             "name": name,
-            "returncode": proc.returncode,
+            "returncode": returncode,
             "command": cmd,
+            "launch_meta": launch_meta,
+            "launch_error": launch_error,
+            "cwd": str(REPO_ROOT),
             "parsed_json_available": result["parsed"] is not None,
         },
     )
@@ -275,6 +423,8 @@ def build_mode_step(mode, step_name, step_result):
         "returncode": step_result["returncode"],
         "parsed": parsed,
         "stderr": step_result["stderr"].strip(),
+        "launch": step_result.get("launch", {}),
+        "launch_error": step_result.get("launch_error", ""),
         "cmd": step_result["cmd"],
         "media_mode": mode,
         "artifacts": step_result["artifacts"],
@@ -576,7 +726,7 @@ def render_summary_markdown(summary):
     return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
 
 
-def build_summary(mode_summaries, global_checks, downloads, requested_modes, run_dir: Path):
+def build_summary(mode_summaries, global_checks, downloads, requested_modes, run_dir: Path, runtime_warnings: list[str] | None = None):
     mode_pass = all(summary["overall_pass"] for summary in mode_summaries.values()) if mode_summaries else False
     global_pass = all(item.get("passed", False) for item in global_checks.values()) if global_checks else True
     overall_pass = mode_pass and global_pass
@@ -591,6 +741,8 @@ def build_summary(mode_summaries, global_checks, downloads, requested_modes, run
         "global_check_summary": summarize_global_checks(global_checks),
         "overall_pass": overall_pass,
         "downloads": downloads,
+        "runtime_warnings": runtime_warnings or [],
+        "dominant_failure_reason_by_step": {},
         "final_verdict": {
             "all_modes_passed": overall_pass,
             "required_modes": requested_modes,
@@ -608,6 +760,29 @@ def build_summary(mode_summaries, global_checks, downloads, requested_modes, run
             summary["final_verdict"]["notes"].append(
                 f"Some regression self-checks failed: {', '.join(failed_global)}."
             )
+    if runtime_warnings:
+        summary["final_verdict"]["notes"].extend(runtime_warnings)
+    step_reason_counts: dict[str, dict[str, int]] = {}
+    for mode_summary in mode_summaries.values():
+        for step_name, step in mode_summary.get("steps", {}).items():
+            parsed = step.get("parsed") or {}
+            if step_name == "l0":
+                counts = parsed.get("summary", {}).get("failure_class_counts", {})
+            elif step_name in {"l05", "mme", "mmbench"}:
+                counts = parsed.get("failure_class_counts", {})
+            else:
+                counts = {}
+            if not counts:
+                continue
+            bucket = step_reason_counts.setdefault(step_name, {})
+            for key, value in counts.items():
+                bucket[key] = bucket.get(key, 0) + int(value or 0)
+    for step_name, counts in step_reason_counts.items():
+        filtered = {k: v for k, v in counts.items() if k != "none"}
+        if not filtered or sum(filtered.values()) == 0:
+            summary["dominant_failure_reason_by_step"][step_name] = "none"
+        else:
+            summary["dominant_failure_reason_by_step"][step_name] = max(filtered.items(), key=lambda item: item[1])[0]
     return summary
 
 
@@ -625,11 +800,20 @@ def main():
     if not args.skip_mmbench:
         downloads.append(download_if_missing(args.mmbench_tsv, MMBENCH_URL, "mmbench", not args.no_auto_download))
 
-    with maybe_start_media_server(args.media_base_url, args.media_root, args.auto_start_media_server):
+    probe_path = resolve_media_probe_path(args.image_dir, args.video_path)
+    runtime_warnings: list[str] = []
+    media_server_observation: dict = {}
+    with maybe_start_media_server(
+        args.media_base_url,
+        args.media_root,
+        args.auto_start_media_server,
+        probe_path,
+        runtime_warnings,
+        media_server_observation,
+    ):
         global_checks = {}
-        transport_cmd = [
-            sys.executable,
-            str(SCRIPT_DIR / "transport_consistency_check.py"),
+        transport_launch = build_python_launch(
+            SCRIPT_DIR / "transport_consistency_check.py",
             "--host",
             args.host,
             "--model",
@@ -643,15 +827,18 @@ def main():
             "--media-base-url",
             args.media_base_url,
             "--json",
-        ]
+        )
         global_checks["transport_consistency"] = build_mode_step(
             "global",
             "transport_consistency",
-            run_json_step("transport_consistency", transport_cmd, run_dir / "global_checks" / "transport_consistency"),
+            run_json_step(
+                "transport_consistency",
+                transport_launch,
+                run_dir / "global_checks" / "transport_consistency",
+            ),
         )
-        contract_cmd = [
-            sys.executable,
-            str(SCRIPT_DIR / "output_contract_self_check.py"),
+        contract_launch = build_python_launch(
+            SCRIPT_DIR / "output_contract_self_check.py",
             "--host",
             args.host,
             "--model",
@@ -673,11 +860,15 @@ def main():
             "--api-key",
             args.api_key,
             "--json",
-        ]
+        )
         global_checks["output_contract"] = build_mode_step(
             "global",
             "output_contract",
-            run_json_step("output_contract", contract_cmd, run_dir / "global_checks" / "output_contract"),
+            run_json_step(
+                "output_contract",
+                contract_launch,
+                run_dir / "global_checks" / "output_contract",
+            ),
         )
 
         mode_summaries = {}
@@ -686,9 +877,8 @@ def main():
             steps = []
             mode_dir = run_dir / "modes" / mode
             if not args.skip_l0:
-                cmd = [
-                    sys.executable,
-                    str(SCRIPT_DIR / "l0_multimodal_smoke.py"),
+                launch = build_python_launch(
+                    SCRIPT_DIR / "l0_multimodal_smoke.py",
                     "--host",
                     args.host,
                     "--model",
@@ -700,18 +890,17 @@ def main():
                     "--media-mode",
                     mode,
                     "--json",
-                ]
+                )
                 if args.media_root:
-                    cmd.extend(["--media-root", args.media_root])
+                    launch["cmd"].extend(["--media-root", args.media_root])
                 if mode == "http" and args.media_base_url:
-                    cmd.extend(["--media-base-url", args.media_base_url])
-                steps.append(("l0", cmd))
+                    launch["cmd"].extend(["--media-base-url", args.media_base_url])
+                steps.append(("l0", launch))
 
             if not args.skip_l05:
                 l05_dir = mode_dir / "l05"
-                cmd = [
-                    sys.executable,
-                    str(SCRIPT_DIR / "multi_pics_eval.py"),
+                launch = build_python_launch(
+                    SCRIPT_DIR / "multi_pics_eval.py",
                     "--dataset-dir",
                     args.l05_dataset_dir,
                     "--endpoint",
@@ -724,18 +913,17 @@ def main():
                     "--output-dir",
                     str(l05_dir),
                     "--json",
-                ]
+                )
                 if args.media_root:
-                    cmd.extend(["--media-root", args.media_root])
+                    launch["cmd"].extend(["--media-root", args.media_root])
                 if mode == "http" and args.media_base_url:
-                    cmd.extend(["--media-base-url", args.media_base_url])
-                steps.append(("l05", cmd))
+                    launch["cmd"].extend(["--media-base-url", args.media_base_url])
+                steps.append(("l05", launch))
 
             if not args.skip_mme:
                 mme_prefix = mode_dir / "mme" / "mme_qwen35_4b"
-                cmd = [
-                    sys.executable,
-                    str(SCRIPT_DIR / "mme_eval_local.py"),
+                launch = build_python_launch(
+                    SCRIPT_DIR / "mme_eval_local.py",
                     "--tsv",
                     args.mme_tsv,
                     "--endpoint",
@@ -754,18 +942,17 @@ def main():
                     str(mme_prefix),
                     "--media-mode",
                     mode,
-                ]
+                )
                 if args.media_root:
-                    cmd.extend(["--media-root", args.media_root])
+                    launch["cmd"].extend(["--media-root", args.media_root])
                 if mode == "http" and args.media_base_url:
-                    cmd.extend(["--media-base-url", args.media_base_url])
-                steps.append(("mme", cmd))
+                    launch["cmd"].extend(["--media-base-url", args.media_base_url])
+                steps.append(("mme", launch))
 
             if not args.skip_mmbench:
                 mmbench_prefix = mode_dir / "mmbench" / "mmbench_dev_en_qwen35_4b"
-                cmd = [
-                    sys.executable,
-                    str(SCRIPT_DIR / "mmbench_eval_local.py"),
+                launch = build_python_launch(
+                    SCRIPT_DIR / "mmbench_eval_local.py",
                     "--tsv",
                     args.mmbench_tsv,
                     "--endpoint",
@@ -784,16 +971,16 @@ def main():
                     str(mmbench_prefix),
                     "--media-mode",
                     mode,
-                ]
+                )
                 if args.media_root:
-                    cmd.extend(["--media-root", args.media_root])
+                    launch["cmd"].extend(["--media-root", args.media_root])
                 if mode == "http" and args.media_base_url:
-                    cmd.extend(["--media-base-url", args.media_base_url])
-                steps.append(("mmbench", cmd))
+                    launch["cmd"].extend(["--media-base-url", args.media_base_url])
+                steps.append(("mmbench", launch))
 
             step_results = []
-            for name, cmd in steps:
-                result = run_json_step(name, cmd, mode_dir / name)
+            for name, launch in steps:
+                result = run_json_step(name, launch, mode_dir / name)
                 step_results.append(result)
                 if not args.json:
                     print(f"=== {mode} / {name} ===")
@@ -804,7 +991,14 @@ def main():
 
             mode_summaries[mode] = build_single_mode_summary(mode, step_results)
 
-    summary = build_summary(mode_summaries, global_checks, downloads, requested_modes, run_dir)
+    summary = build_summary(mode_summaries, global_checks, downloads, requested_modes, run_dir, runtime_warnings)
+    summary["execution_environment_check"] = build_execution_environment_check(
+        args.host,
+        args.media_base_url,
+        args.media_root,
+        probe_path,
+    )
+    summary["execution_environment_check"]["parent_media_server"] = media_server_observation
     summary_paths = {
         "json": str((run_dir / "summary.json").resolve()),
         "md": str((run_dir / "summary.md").resolve()),

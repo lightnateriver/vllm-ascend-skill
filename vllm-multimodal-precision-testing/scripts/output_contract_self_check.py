@@ -4,10 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
+from runner_exec_utils import build_python_cmd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_HOST = "http://127.0.0.1:8000"
@@ -87,9 +87,8 @@ def main() -> int:
     checks = [
         run_and_check(
             "l0",
-            [
-                sys.executable,
-                str(SCRIPT_DIR / "l0_multimodal_smoke.py"),
+            build_python_cmd(
+                SCRIPT_DIR / "l0_multimodal_smoke.py",
                 "--host",
                 args.host,
                 "--model",
@@ -101,15 +100,14 @@ def main() -> int:
                 "--media-mode",
                 "base64",
                 "--json",
-            ],
+            ),
             required_keys=["summary", "results"],
             nested_keys=[("summary", ["passed", "failed", "total", "media_mode"])],
         ),
         run_and_check(
             "l05",
-            [
-                sys.executable,
-                str(SCRIPT_DIR / "multi_pics_eval.py"),
+            build_python_cmd(
+                SCRIPT_DIR / "multi_pics_eval.py",
                 "--dataset-dir",
                 args.l05_dataset_dir,
                 "--case-range",
@@ -121,7 +119,7 @@ def main() -> int:
                 "--media-mode",
                 "base64",
                 "--json",
-            ],
+            ),
             required_keys=["run_name", "total", "correct", "wrong", "unknown", "timeout", "accuracy", "failure_class_counts"],
             nested_keys=[],
         ),
@@ -131,9 +129,8 @@ def main() -> int:
         checks.append(
             run_and_check(
                 "mme",
-                [
-                    sys.executable,
-                    str(SCRIPT_DIR / "mme_eval_local.py"),
+                build_python_cmd(
+                    SCRIPT_DIR / "mme_eval_local.py",
                     "--tsv",
                     args.mme_tsv,
                     "--limit",
@@ -148,7 +145,7 @@ def main() -> int:
                     str(DEFAULT_OUTPUT_ROOT / "mme_contract"),
                     "--media-mode",
                     "base64",
-                ],
+                ),
                 required_keys=["rows", "exact_acc", "unknown", "pred_path", "score_path", "scores"],
                 nested_keys=[],
             )
@@ -158,9 +155,8 @@ def main() -> int:
         checks.append(
             run_and_check(
                 "mmbench",
-                [
-                    sys.executable,
-                    str(SCRIPT_DIR / "mmbench_eval_local.py"),
+                build_python_cmd(
+                    SCRIPT_DIR / "mmbench_eval_local.py",
                     "--tsv",
                     args.mmbench_tsv,
                     "--limit",
@@ -175,7 +171,7 @@ def main() -> int:
                     str(DEFAULT_OUTPUT_ROOT / "mmbench_contract"),
                     "--media-mode",
                     "base64",
-                ],
+                ),
                 required_keys=["rows_all", "rows_scored", "exact_acc", "z_fallback", "pred_all_path", "pred_path", "score_path", "scores"],
                 nested_keys=[],
             )

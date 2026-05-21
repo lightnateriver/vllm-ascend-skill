@@ -63,6 +63,7 @@ For `local_path`, the served model process must allow the media root via `--allo
 For `http`, use a local static server such as `http://127.0.0.1:9000`, not a remote host.
 
 The bundled runners now also query `/v1/models` first and normalize the requested model id when the service exposes a different canonical form, such as a trailing slash.
+Do not assume `rtk` exists in a fresh session. Manual top-level commands should default to plain `python3`. The bundled runners probe `RTK_BIN` and `PATH` first, and only wrap child Python commands with `rtk` after they confirm an executable `rtk` is actually available.
 
 ## L0 Smoke
 
@@ -169,6 +170,8 @@ Important report fields:
 - `mode_comparison`
 - `global_checks`
 - `global_check_summary`
+- `execution_environment_check`
+- `dominant_failure_reason_by_step`
 - `precision_summary`
 - `engineering_errors`
 - `model_limitations`
@@ -182,10 +185,36 @@ Important report fields:
 3. Run `run_full_regression.py` for default three-mode precision.
 4. If needed, run `run_standard_retest.py` to combine capability and precision in one artifact tree.
 
+Practical usage notes for a fresh session:
+
+- the default full regression is expensive, not a quick smoke run
+- with the current bundled TSV files, `MME` and `MMBench` are full-data runs and can take a long time plus a large request volume
+- if you only need early triage, check `transport_consistency_check.py`, `output_contract_self_check.py`, `L0`, and `L0.5` first
+- if you reuse `http://127.0.0.1:9000`, make sure it serves the same `--media-root` you pass to the precision scripts
+- if shell `curl` to `/v1/models` works but Python children still report request errors or readiness failures, suspect the execution environment before suspecting the service
+- if `http` mode fails only inside Python while `base64` and `local_path` work, check whether the current session can bind a localhost media server for child processes
+- default to plain `python3 ...` for top-level manual commands; only switch to `rtk python3 ...` after you explicitly confirm `rtk` exists in the current environment
+- prefer a unique `--output-root` or `--run-name` per run so old artifacts are not confused with the new session
+
+Optional RTK probe for a fresh session:
+
+```bash
+if command -v rtk >/dev/null 2>&1; then
+  RUNNER=(rtk python3)
+else
+  RUNNER=(python3)
+fi
+
+"${RUNNER[@]}" scripts/run_full_regression.py \
+  --media-root /mnt/sfs_turbo \
+  --media-base-url http://127.0.0.1:9000 \
+  --auto-start-media-server
+```
+
 ## Default command
 
 ```bash
-python scripts/run_full_regression.py \
+python3 scripts/run_full_regression.py \
   --media-root /mnt/sfs_turbo \
   --media-base-url http://127.0.0.1:9000 \
   --auto-start-media-server

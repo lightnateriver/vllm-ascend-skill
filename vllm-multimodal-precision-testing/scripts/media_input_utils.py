@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import errno
 import json
 import mimetypes
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 def add_media_mode_args(parser):
@@ -32,6 +36,59 @@ def add_media_mode_args(parser):
             "when media-mode is http or local_path."
         ),
     )
+
+
+class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+def _parse_http_url(media_base_url: str) -> tuple[str, int]:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(media_base_url)
+    scheme = (parsed.scheme or "").lower()
+    host = parsed.hostname or ""
+    port = parsed.port or 80
+    if scheme != "http" or host not in {"127.0.0.1", "localhost"}:
+        raise ValueError(
+            f"http auto media server requires a localhost HTTP URL, got: {media_base_url}"
+        )
+    return host, port
+
+
+def _start_local_http_server(root: Path, host: str, requested_port: int) -> tuple[ReusableThreadingHTTPServer, int]:
+    handler = lambda *args, **kwargs: QuietHTTPRequestHandler(*args, directory=str(root), **kwargs)
+    try:
+        httpd = ReusableThreadingHTTPServer((host, requested_port), handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        httpd = ReusableThreadingHTTPServer((host, 0), handler)
+    actual_port = int(httpd.server_address[1])
+    return httpd, actual_port
+
+
+@contextlib.contextmanager
+def local_http_media_server(media_mode: str, media_root: str, media_base_url: str):
+    if media_mode != "http":
+        yield media_base_url
+        return
+
+    root = Path(media_root).expanduser().resolve()
+    host, requested_port = _parse_http_url(media_base_url)
+    httpd, chosen_port = _start_local_http_server(root, host, requested_port)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{chosen_port}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def _sanitize_relative_path(image_path: str | None, fallback_name: str) -> Path:

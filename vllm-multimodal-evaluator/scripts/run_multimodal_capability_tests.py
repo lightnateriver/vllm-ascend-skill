@@ -24,6 +24,7 @@ from capability_case_profiles import (
     assert_case_files,
     build_capability_cases,
 )
+from runner_exec_utils import build_python_cmd, build_python_launch
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
@@ -67,7 +68,7 @@ def ensure_local_media(
     ]
     if any(not path.exists() for path in standard_image_probes):
         subprocess.run(
-            ["python3", str(SCRIPT_DIR / "generate_shape_dataset.py"), "--resolution-profile", "standard"],
+            build_python_cmd(SCRIPT_DIR / "generate_shape_dataset.py", "--resolution-profile", "standard"),
             cwd=project_root,
             check=True,
         )
@@ -78,7 +79,7 @@ def ensure_local_media(
     ]
     if any(not path.exists() for path in standard_video_probes):
         subprocess.run(
-            ["python3", str(SCRIPT_DIR / "generate_shape_videos.py"), "--resolution-profile", "standard"],
+            build_python_cmd(SCRIPT_DIR / "generate_shape_videos.py", "--resolution-profile", "standard"),
             cwd=project_root,
             check=True,
         )
@@ -86,8 +87,7 @@ def ensure_local_media(
         large_image_probes = [pics_root / resolution / "jpg" / "square.jpg" for resolution in large_image_resolutions]
         if any(not path.exists() for path in large_image_probes):
             cmd = [
-                "python3",
-                str(SCRIPT_DIR / "generate_shape_dataset.py"),
+                *build_python_cmd(SCRIPT_DIR / "generate_shape_dataset.py"),
                 "--resolution-profile",
                 "large",
                 "--formats",
@@ -174,13 +174,62 @@ def is_url_reachable(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
+def build_execution_environment_check(
+    base_url: str,
+    media_base_url: str | None,
+    project_root: Path,
+    models_status: int,
+    models_raw: str,
+) -> dict[str, Any]:
+    probe_url = build_media_probe_url(media_base_url, project_root) if media_base_url else None
+    expected_media_ok = bool(probe_url and is_url_reachable(probe_url, timeout=2.0))
+    return {
+        "python_models_probe": {
+            "url": f"{base_url.rstrip('/')}/models",
+            "http_status": models_status,
+            "ok": models_status == 200,
+            "error": "" if models_status == 200 else (models_raw.strip() or "http_request_error"),
+        },
+        "media_http_probe": {
+            "base_url": media_base_url or "",
+            "base_url_reachable": bool(media_base_url and is_url_reachable(media_base_url, timeout=2.0)),
+            "expected_media_url": probe_url or "",
+            "expected_media_reachable": expected_media_ok,
+        },
+    }
+
+
+def build_media_probe_url(media_base_url: str, project_root: Path) -> str | None:
+    candidates = [
+        project_root / "pics" / "720x1280" / "jpg" / "circle.jpg",
+        project_root / "video" / "720x1280" / "mp4" / "shapes.mp4",
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        relative = candidate.resolve().relative_to(project_root.resolve())
+        quoted = "/".join(urllib.parse.quote(part) for part in relative.parts)
+        return f"{media_base_url.rstrip('/')}/{quoted}"
+    return None
+
+
 @contextlib.contextmanager
 def maybe_start_media_server(
     media_base_url: str | None,
     project_root: Path,
     auto_start: bool,
+    warnings: list[str] | None = None,
+    observations: dict[str, Any] | None = None,
 ) -> Any:
     if not media_base_url or not auto_start:
+        if observations is not None:
+            observations.update(
+                {
+                    "parent_auto_start_requested": bool(auto_start),
+                    "strategy": "not_requested",
+                    "parent_bind_attempted": False,
+                }
+            )
         yield
         return
 
@@ -189,10 +238,43 @@ def maybe_start_media_server(
     port = parsed.port or 80
 
     if parsed.scheme != "http" or host not in {"127.0.0.1", "localhost"}:
+        if observations is not None:
+            observations.update(
+                {
+                    "parent_auto_start_requested": bool(auto_start),
+                    "strategy": "non_local_http_url",
+                    "parent_bind_attempted": False,
+                }
+            )
         yield
         return
 
+    probe_url = build_media_probe_url(media_base_url, project_root)
     if is_url_reachable(media_base_url, timeout=2.0):
+        if probe_url is None or is_url_reachable(probe_url, timeout=2.0):
+            if observations is not None:
+                observations.update(
+                    {
+                        "parent_auto_start_requested": True,
+                        "strategy": "reuse_existing_expected_server",
+                        "parent_bind_attempted": False,
+                    }
+                )
+            yield
+            return
+        if warnings is not None:
+            warnings.append(
+                f"{media_base_url} is reachable, but it is not serving the expected evaluator media root; "
+                "continuing with the existing server and child fallbacks."
+            )
+        if observations is not None:
+            observations.update(
+                {
+                    "parent_auto_start_requested": True,
+                    "strategy": "existing_server_wrong_root",
+                    "parent_bind_attempted": False,
+                }
+            )
         yield
         return
 
@@ -201,15 +283,63 @@ def maybe_start_media_server(
         httpd = ReusableThreadingHTTPServer((host, port), handler)
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
-            if is_url_reachable(media_base_url, timeout=2.0):
+            if is_url_reachable(media_base_url, timeout=2.0) and (
+                probe_url is None or is_url_reachable(probe_url, timeout=2.0)
+            ):
+                if warnings is not None:
+                    warnings.append(
+                        f"Media server port {port} is already in use; using the existing reachable server."
+                    )
+                if observations is not None:
+                    observations.update(
+                        {
+                            "parent_auto_start_requested": True,
+                            "strategy": "reuse_existing_expected_server_after_eaddrinuse",
+                            "parent_bind_attempted": True,
+                        }
+                    )
                 yield
                 return
-            raise RuntimeError(
-                f"Media server port {port} is already in use, but {media_base_url} is not serving HTTP media."
-            ) from exc
+            if warnings is not None:
+                warnings.append(
+                    f"Media server port {port} is already in use, but {media_base_url} is not serving the expected evaluator media root."
+                )
+            if observations is not None:
+                observations.update(
+                    {
+                        "parent_auto_start_requested": True,
+                        "strategy": "eaddrinuse_wrong_root",
+                        "parent_bind_attempted": True,
+                    }
+                )
+            yield
+            return
+        if exc.errno in {errno.EPERM, errno.EACCES} or isinstance(exc, PermissionError):
+            if warnings is not None:
+                warnings.append(
+                    f"Media server bind on {host}:{port} was denied; continuing without parent auto-start."
+                )
+            if observations is not None:
+                observations.update(
+                    {
+                        "parent_auto_start_requested": True,
+                        "strategy": "bind_denied",
+                        "parent_bind_attempted": True,
+                    }
+                )
+            yield
+            return
         raise
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+    if observations is not None:
+        observations.update(
+            {
+                "parent_auto_start_requested": True,
+                "strategy": "started_parent_server",
+                "parent_bind_attempted": True,
+            }
+        )
     try:
         yield
     finally:
@@ -580,15 +710,27 @@ def build_function_calling_placeholder(status: str, error: str) -> list[dict[str
     ]
 
 
+def extract_json_suffix(stdout: str) -> dict[str, Any] | None:
+    lines = stdout.strip().splitlines()
+    for idx, line in enumerate(lines):
+        if not line.lstrip().startswith("{"):
+            continue
+        candidate = "\n".join(lines[idx:])
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
 def run_function_calling_suite(
     script_path: Path,
     test_file: Path,
     base_url: str,
     model: str,
 ) -> list[dict[str, Any]]:
-    cmd = [
-        sys.executable,
-        str(script_path),
+    launch = build_python_launch(
+        script_path,
         "--endpoint",
         f"{base_url.rstrip('/')}/chat/completions",
         "--model",
@@ -596,21 +738,30 @@ def run_function_calling_suite(
         "--test-file",
         str(test_file),
         "--json",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if not proc.stdout.strip():
-        return build_function_calling_placeholder("BLOCKED", proc.stderr.strip() or "fc_test produced no JSON output")
+    )
+    cmd = launch["cmd"]
+    env = launch.get("env")
+    launch_error = ""
     try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        snippet = (proc.stdout or proc.stderr)[:500]
-        return build_function_calling_placeholder("BLOCKED", f"fc_test JSON parse failed: {exc}; raw={snippet}")
-    normalized = normalize_function_calling_results(payload, proc.returncode)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=str(SCRIPT_DIR.parent.parent), env=env)
+        stdout = proc.stdout
+        stderr = proc.stderr
+        returncode = proc.returncode
+    except OSError as exc:
+        stdout = ""
+        stderr = f"{type(exc).__name__}: {exc}"
+        launch_error = stderr
+        returncode = 127 if getattr(exc, "errno", None) == errno.ENOENT or isinstance(exc, FileNotFoundError) else 126
+    parsed_payload = extract_json_suffix(stdout)
+    if not isinstance(parsed_payload, dict):
+        return build_function_calling_placeholder("BLOCKED", launch_error or stderr.strip() or "fc_test produced no JSON output")
+    payload = parsed_payload
+    normalized = normalize_function_calling_results(payload, returncode)
     if normalized:
         return normalized
-    if proc.returncode == 0:
+    if returncode == 0:
         return build_function_calling_placeholder("SKIP", "fc_test returned no per-case results")
-    return build_function_calling_placeholder("BLOCKED", proc.stderr.strip() or "fc_test failed without per-case results")
+    return build_function_calling_placeholder("BLOCKED", launch_error or stderr.strip() or "fc_test failed without per-case results")
 
 
 def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any], summary: dict[str, Any]) -> str:
@@ -667,6 +818,18 @@ def render_markdown(results: list[dict[str, Any]], preflight: dict[str, Any], su
         lines.append(
             f"| {escape_cell(suite_name)} | {counts.get('PASS', 0)} | {counts.get('FAIL', 0)} | {counts.get('BLOCKED', 0)} | {counts.get('SKIP', 0)} |"
         )
+
+    runtime_warnings = preflight.get("runtime_warnings", [])
+    if runtime_warnings:
+        lines.extend(
+            [
+                "",
+                "### Runtime Warnings",
+                "",
+            ]
+        )
+        for warning in runtime_warnings:
+            lines.append(f"- {warning}")
 
     lines.extend(
         [
@@ -915,6 +1078,7 @@ def main() -> None:
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--json", action="store_true", help="Print the final report JSON to stdout.")
     parser.add_argument("--results-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -1114,10 +1278,25 @@ def main() -> None:
             "media_base_url": args.media_base_url or "N/A (local_path + base64 only)",
         },
     }
+    preflight["execution_environment_check"] = build_execution_environment_check(
+        args.base_url,
+        args.media_base_url,
+        project_root,
+        models_status,
+        models_raw,
+    )
 
     run_started_at = time.perf_counter()
     should_auto_start_media_server = args.auto_start_media_server and not args.dry_run
-    with maybe_start_media_server(args.media_base_url, project_root, should_auto_start_media_server):
+    runtime_warnings: list[str] = []
+    media_server_observation: dict[str, Any] = {}
+    with maybe_start_media_server(
+        args.media_base_url,
+        project_root,
+        should_auto_start_media_server,
+        runtime_warnings,
+        media_server_observation,
+    ):
         if args.dry_run:
             results = []
             for case in all_cases:
@@ -1259,14 +1438,19 @@ def main() -> None:
         "results": results,
         "summary": summary,
     }
+    preflight["runtime_warnings"] = runtime_warnings
+    preflight["execution_environment_check"]["parent_media_server"] = media_server_observation
     write_json(report_json, report)
     report_md.write_text(render_markdown(results, preflight, summary), encoding="utf-8")
 
-    counts = {key: summary_counts.get(key, 0) for key in sorted(summary_counts)}
-    print(f"Wrote {report_json}")
-    print(f"Wrote {report_md}")
-    print(f"Total runtime seconds: {total_runtime_seconds}")
-    print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        counts = {key: summary_counts.get(key, 0) for key in sorted(summary_counts)}
+        print(f"Wrote {report_json}")
+        print(f"Wrote {report_md}")
+        print(f"Total runtime seconds: {total_runtime_seconds}")
+        print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":

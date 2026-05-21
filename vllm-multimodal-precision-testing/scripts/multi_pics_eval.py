@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from media_input_utils import build_image_reference, curl_json_request, resolve_model_id
+from media_input_utils import build_image_reference, curl_json_request, local_http_media_server, resolve_model_id
 
 DEFAULT_DATASET_DIR = Path("multi-pics-datasets/cases")
 DEFAULT_OUTPUT_ROOT = Path("multi-pics-runs")
@@ -498,30 +498,34 @@ def main() -> int:
             poll_interval=args.ready_poll_interval,
         )
 
-    results = []
-    for case_dir in case_dirs:
-        case_meta = load_case(case_dir)
-        result = run_case(
-            endpoint=args.endpoint,
-            model=resolved_model,
-            case_meta=case_meta,
-            max_completion_tokens=args.max_completion_tokens,
-            temperature=args.temperature,
-            timeout=args.timeout,
-            strict_raw=args.strict_raw,
-            media_mode=args.media_mode,
-            media_root=args.media_root,
-            media_base_url=args.media_base_url,
-        )
-        results.append(result)
-        print(
-            f"[{result['status'].upper():7}] case={result['case_id']} "
-            f"images={result['image_count']} gold={result['gold_answer']} "
-            f"pred={result['extracted_prediction']} error={result['error_type']}",
-            file=sys.stderr,
-        )
+    with local_http_media_server(args.media_mode, args.media_root, args.media_base_url) as effective_media_base_url:
+        results = []
+        for case_dir in case_dirs:
+            case_meta = load_case(case_dir)
+            result = run_case(
+                endpoint=args.endpoint,
+                model=resolved_model,
+                case_meta=case_meta,
+                max_completion_tokens=args.max_completion_tokens,
+                temperature=args.temperature,
+                timeout=args.timeout,
+                strict_raw=args.strict_raw,
+                media_mode=args.media_mode,
+                media_root=args.media_root,
+                media_base_url=effective_media_base_url or "",
+            )
+            results.append(result)
+            print(
+                f"[{result['status'].upper():7}] case={result['case_id']} "
+                f"images={result['image_count']} gold={result['gold_answer']} "
+                f"pred={result['extracted_prediction']} error={result['error_type']}",
+                file=sys.stderr,
+            )
 
+    original_media_base_url = args.media_base_url
+    args.media_base_url = effective_media_base_url or args.media_base_url
     summary = summarize(results, run_dir, args)
+    args.media_base_url = original_media_base_url
     summary["resolved_model"] = resolved_model
     write_outputs(run_dir, results, summary)
 
